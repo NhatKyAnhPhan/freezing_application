@@ -27,13 +27,17 @@ class DeviceStatsReader(private val context: Context) {
 	private var lastRxBytes = -1L
 	private var lastTxBytes = -1L
 	private var lastNetworkTimestamp = 0L
+	private var designCapacityLoaded = false
+	private var cachedDesignCapacityMah = 0.0
+	private var fullCapacityLoaded = false
+	private var cachedFullCapacityMah = 0.0
 
 	fun read(runningAppCount: Int, processCount: Int): Map<String, Any?> {
 		val cpu = readCpu(processCount)
 		val gpu = try {
 			readGpu()
 		} catch (error: Throwable) {
-			mapOf("name" to "", "usagePercent" to 0.0, "currentFrequencyMhz" to 0, "temperatureCelsius" to null)
+			mapOf("name" to "", "usagePercent" to -1.0, "currentFrequencyMhz" to 0, "temperatureCelsius" to null)
 		}
 		val network = try {
 			readNetwork()
@@ -65,7 +69,18 @@ class DeviceStatsReader(private val context: Context) {
 			"processCount" to processCount,
 			"loadAverage" to loadAverage(),
 			"architecture" to (Build.SUPPORTED_ABIS.firstOrNull() ?: ""),
+			"model" to cpuModel(),
 		)
+	}
+
+	private fun cpuModel(): String {
+		val socModel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Build.SOC_MODEL else ""
+		if (socModel.isNotBlank()) return socModel
+		val cpuInfo = readFile("/proc/cpuinfo") ?: return Build.HARDWARE
+		return cpuInfo.lineSequence()
+			.firstOrNull { it.startsWith("Hardware") || it.startsWith("Processor") }
+			?.substringAfter(':')?.trim()?.takeIf(String::isNotBlank)
+			?: Build.HARDWARE
 	}
 
 	/**
@@ -171,12 +186,13 @@ class DeviceStatsReader(private val context: Context) {
 		val usage = listOf(
 			"/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage",
 			"/sys/class/kgsl/kgsl-3d0/gpu_busy_percent",
+			"/sys/class/kgsl/kgsl-3d0/devfreq/gpu_busy_percentage",
 		).asSequence()
 			.mapNotNull { readFile(it)?.trim()?.replace("%", "")?.toDoubleOrNull() }
-			.firstOrNull() ?: 0.0
+			.firstOrNull() ?: -1.0
 		return mapOf(
 			"name" to name,
-			"usagePercent" to usage.coerceIn(0.0, 100.0),
+			"usagePercent" to if (usage < 0) -1.0 else usage.coerceIn(0.0, 100.0),
 			"currentFrequencyMhz" to (if (frequencyRaw > 100000L) frequencyRaw / 1000L else frequencyRaw).toInt(),
 			"temperatureCelsius" to gpuTemperatureCelsius(),
 		)
@@ -331,6 +347,19 @@ class DeviceStatsReader(private val context: Context) {
 		val currentMilliAmps = normaliseMicro(currentNowMicroAmps, fallbackDivisor = 1000.0)
 		val chargeCounterMah = normaliseMicro(chargeCounterMicroAh, fallbackDivisor = 1000.0)
 		val capacityMah = batteryCapacityMah(chargeCounterMah, percent)
+		val designCapacityMah = cachedBatteryCapacity(listOf(
+			"/sys/class/power_supply/battery/charge_full_design",
+			"/sys/class/power_supply/bms/charge_full_design",
+			"/sys/class/power_supply/battery/capacity_full_design",
+		))
+		val fullChargeCapacityMah = cachedBatteryCapacity(listOf(
+			"/sys/class/power_supply/battery/charge_full",
+			"/sys/class/power_supply/bms/charge_full",
+			"/sys/class/power_supply/battery/capacity_full",
+		))
+		val measuredCapacityMah = estimateFullCapacity(chargeCounterMah, percent)
+		val referenceCapacityMah = batteryReferenceCapacity(designCapacityMah, measuredCapacityMah, percent)
+		val actualCapacityMah = if (fullChargeCapacityMah > 0.0) fullChargeCapacityMah else measuredCapacityMah
 
 		return mapOf(
 			"levelPercent" to percent,
@@ -343,10 +372,72 @@ class DeviceStatsReader(private val context: Context) {
 			"health" to health,
 			"technology" to technology,
 			"chargeCounterMah" to chargeCounterMah,
-			"capacityMah" to capacityMah,
+			"capacityMah" to if (actualCapacityMah > 0.0) actualCapacityMah else capacityMah,
+			"designCapacityMah" to designCapacityMah,
+			"fullChargeCapacityMah" to actualCapacityMah,
+			"measuredCapacityMah" to measuredCapacityMah,
+			"referenceCapacityMah" to referenceCapacityMah,
 			"estimatedRemainingMinutes" to estimateMinutes(chargeCounterMah, currentMilliAmps, percent, charging),
 			"estimatedFullMinutes" to null,
 		)
+	}
+
+	private fun estimateFullCapacity(chargeCounterMah: Double, percent: Int): Double {
+		if (chargeCounterMah <= 0.0 || percent !in 5..100) return 0.0
+		val estimate = chargeCounterMah * 100.0 / percent
+		return if (estimate in 500.0..30000.0) estimate else 0.0
+	}
+
+	private fun batteryReferenceCapacity(design: Double, measured: Double, percent: Int): Double {
+		if (design > 0.0) return design
+		val preferences = context.getSharedPreferences("battery_telemetry", Context.MODE_PRIVATE)
+		val saved = preferences.getFloat("reference_capacity_mah", 0f).toDouble()
+		if (measured > 0.0 && percent >= 80) {
+			val reference = maxOf(saved, measured)
+			if (reference > saved) {
+				preferences.edit().putFloat("reference_capacity_mah", reference.toFloat()).apply()
+			}
+			return reference
+		}
+		return saved
+	}
+
+	private fun readCapacity(paths: List<String>): Double {
+		for (path in paths) {
+			val raw = readFile(path)?.trim()?.toDoubleOrNull() ?: continue
+			val capacity = if (raw > 100000.0) raw / 1000.0 else raw
+			if (capacity in 500.0..30000.0) return capacity
+		}
+		return 0.0
+	}
+
+	private fun cachedBatteryCapacity(paths: List<String>): Double {
+		val isDesign = paths.any { it.contains("design") }
+		if (isDesign && designCapacityLoaded) return cachedDesignCapacityMah
+		if (!isDesign && fullCapacityLoaded) return cachedFullCapacityMah
+		var capacity = readCapacity(paths)
+		if (capacity <= 0.0 && ShizukuShell.isGranted()) {
+			val command = paths.joinToString(" ; ") { "cat $it 2>/dev/null && exit" }
+			val output = ShizukuShell.run(command)
+			capacity = output.output.trim().lineSequence()
+				.mapNotNull { it.trim().toDoubleOrNull() }
+				.map { if (it > 100000.0) it / 1000.0 else it }
+				.firstOrNull { it in 500.0..30000.0 } ?: 0.0
+		}
+		if (capacity <= 0.0 && ShizukuShell.isGranted()) {
+			val dump = ShizukuShell.run("dumpsys battery").output
+			val key = if (isDesign) "(design|full)[ _-]*capacity" else "full[ _-]*charge[ _-]*capacity"
+			capacity = Regex("(?im)$key\\s*[:=]\\s*(\\d+)")
+				.find(dump)?.groupValues?.getOrNull(1)?.toDoubleOrNull() ?: 0.0
+		}
+		if (isDesign) {
+			designCapacityLoaded = true
+			cachedDesignCapacityMah = capacity
+		} else {
+			fullCapacityLoaded = true
+			cachedFullCapacityMah = capacity
+		}
+		return capacity
 	}
 
 	/** Reads design/full charge capacity where the vendor exposes it. */

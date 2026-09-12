@@ -23,6 +23,7 @@ class MainActivity : FlutterActivity() {
 	private lateinit var deviceStatsReader: DeviceStatsReader
 	private var installedApplicationCache: List<ApplicationInfo>? = null
 	private var disabledPackageCache: Set<String> = emptySet()
+	private var restrictedPackageCache: MutableSet<String> = mutableSetOf()
 	private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
 		if (requestCode == REQUEST_CODE) {
 			permissionResult?.success(shizukuStatus())
@@ -39,9 +40,16 @@ class MainActivity : FlutterActivity() {
 				"cleanRam" -> cleanRam(result)
 				"trimCaches" -> trimCaches(result)
 				"getDeviceStats" -> {
-					val manager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
-					val processCount = manager?.runningAppProcesses?.size ?: 0
-					result.success(deviceStatsReader.read(processCount, processCount))
+					Thread {
+						try {
+							val manager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+							val processCount = manager?.runningAppProcesses?.size ?: 0
+							val stats = deviceStatsReader.read(processCount, processCount)
+							runOnUiThread { result.success(stats) }
+						} catch (error: Throwable) {
+							runOnUiThread { result.error("DEVICE_STATS", error.message, null) }
+						}
+					}.start()
 				}
 				"getRunningAppCount" -> result.success(0)
 				else -> result.notImplemented()
@@ -131,6 +139,7 @@ class MainActivity : FlutterActivity() {
 						.map { it.removePrefix("package:").trim() }
 						.filter { it.isNotEmpty() }
 						.toSet()
+					restrictedPackageCache = readRestrictedPackages().toMutableSet()
 					installedApplicationCache = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
 						.filter { it.packageName != packageName }
 						.sortedBy { it.loadLabel(packageManager).toString().lowercase() }
@@ -140,7 +149,7 @@ class MainActivity : FlutterActivity() {
 					mapOf(
 						"name" to applicationInfo.loadLabel(packageManager).toString(),
 						"packageName" to applicationInfo.packageName,
-						"isFrozen" to disabledPackageCache.contains(applicationInfo.packageName),
+						"isFrozen" to (disabledPackageCache + restrictedPackageCache).contains(applicationInfo.packageName),
 						"isSystem" to ((applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0),
 						"iconBytes" to iconBytes(applicationInfo.loadIcon(packageManager)),
 					)
@@ -203,13 +212,31 @@ class MainActivity : FlutterActivity() {
 		}
 		Thread {
 			try {
-				val command = if (frozen) "pm disable-user --user 0 $packageName" else "pm enable $packageName"
+				val command = if (frozen) {
+					"cmd appops set $packageName RUN_ANY_IN_BACKGROUND ignore; cmd appops set $packageName RUN_IN_BACKGROUND ignore"
+				} else {
+					val restore = if (disabledPackageCache.contains(packageName)) "pm enable $packageName; " else ""
+					"${restore}cmd appops set $packageName RUN_ANY_IN_BACKGROUND allow; cmd appops set $packageName RUN_IN_BACKGROUND allow"
+				}
 				runShell(command)
+				if (frozen) restrictedPackageCache.add(packageName) else restrictedPackageCache.remove(packageName)
+				disabledPackageCache = disabledPackageCache - packageName
 				runOnUiThread { result.success(true) }
 			} catch (error: Exception) {
 				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
 			}
 		}.start()
+	}
+
+	private fun readRestrictedPackages(): Set<String> {
+		return try {
+			runShell("cmd appops query-op RUN_ANY_IN_BACKGROUND ignore")
+				.lineSequence()
+				.mapNotNull { Regex("([A-Za-z0-9_]+\\.)+[A-Za-z0-9_]+").find(it)?.value }
+				.toSet()
+		} catch (error: Throwable) {
+			emptySet()
+		}
 	}
 
 	private fun runShell(command: String): String {

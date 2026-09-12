@@ -14,6 +14,10 @@ class BatteryStats {
     this.technology = '',
     this.chargeCounterMah = 0,
     this.capacityMah = 0,
+    this.designCapacityMah = 0,
+    this.fullChargeCapacityMah = 0,
+    this.measuredCapacityMah = 0,
+    this.referenceCapacityMah = 0,
     this.estimatedRemainingMinutes,
     this.estimatedFullMinutes,
   });
@@ -39,6 +43,10 @@ class BatteryStats {
   /// Charge counter reported by the fuel gauge, in mAh.
   final double chargeCounterMah;
   final double capacityMah;
+  final double designCapacityMah;
+  final double fullChargeCapacityMah;
+  final double measuredCapacityMah;
+  final double referenceCapacityMah;
 
   /// Time until empty (or until full while charging), in minutes.
   final int? estimatedRemainingMinutes;
@@ -49,6 +57,16 @@ class BatteryStats {
   bool get isWarm => temperatureCelsius >= 40;
   bool get isHot => temperatureCelsius >= 45;
   bool get isHealthy => health == 'good';
+  double? get healthPercent {
+    final reference = designCapacityMah > 0 ? designCapacityMah : referenceCapacityMah;
+    final actual = fullChargeCapacityMah > 0 ? fullChargeCapacityMah : measuredCapacityMah;
+    if (reference <= 0 || actual <= 0) return null;
+    return (actual / reference * 100).clamp(0, 100).toDouble();
+  }
+  double? get wearPercent {
+    final value = healthPercent;
+    return value == null ? null : (100 - value).clamp(0, 100).toDouble();
+  }
 
   /// Negative while draining, positive while charging.
   double get signedCurrent => isCharging ? currentMilliAmps.abs() : -currentMilliAmps.abs();
@@ -75,6 +93,10 @@ class BatteryStats {
       technology: JsonUtils.toStringValue(map['technology']),
       chargeCounterMah: JsonUtils.toDouble(map['chargeCounterMah']),
       capacityMah: JsonUtils.toDouble(map['capacityMah']),
+      designCapacityMah: JsonUtils.toDouble(map['designCapacityMah']),
+      fullChargeCapacityMah: JsonUtils.toDouble(map['fullChargeCapacityMah']),
+      measuredCapacityMah: JsonUtils.toDouble(map['measuredCapacityMah']),
+      referenceCapacityMah: JsonUtils.toDouble(map['referenceCapacityMah']),
       estimatedRemainingMinutes: JsonUtils.toNullableInt(map['estimatedRemainingMinutes']),
       estimatedFullMinutes: JsonUtils.toNullableInt(map['estimatedFullMinutes']),
     );

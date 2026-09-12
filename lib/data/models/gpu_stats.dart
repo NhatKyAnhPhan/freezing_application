@@ -3,7 +3,7 @@ import '../../core/json_utils.dart';
 class GpuStats {
   const GpuStats({
     this.name = '',
-    this.usagePercent = 0,
+    this.usagePercent = -1,
     this.currentFrequencyMhz = 0,
     this.temperatureCelsius,
   });

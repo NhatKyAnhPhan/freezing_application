@@ -11,6 +11,7 @@ class CpuStats {
     this.processCount = 0,
     this.loadAverage = 0,
     this.architecture = '',
+    this.model = '',
   });
 
   /// Aggregate utilisation across all cores, 0-100.
@@ -36,6 +37,7 @@ class CpuStats {
 
   /// CPU ABI, e.g. `arm64-v8a`.
   final String architecture;
+  final String model;
 
   bool get isWarm => (temperatureCelsius ?? 0) >= 55;
   bool get isHot => (temperatureCelsius ?? 0) >= 70;
@@ -56,6 +58,7 @@ class CpuStats {
       processCount: JsonUtils.toInt(map['processCount']),
       loadAverage: JsonUtils.toDouble(map['loadAverage']),
       architecture: JsonUtils.toStringValue(map['architecture']),
+      model: JsonUtils.toStringValue(map['model']),
     );
   }
 }

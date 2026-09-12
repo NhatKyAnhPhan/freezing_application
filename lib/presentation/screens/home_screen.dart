@@ -1,12 +1,14 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
 
+import 'package:flutter/material.dart';
+import '../../data/models/app_model.dart';
 import '../../core/constants.dart';
 import '../../core/formatters.dart';
 import '../../logic/app_scope.dart';
 import '../../logic/freezer_provider.dart';
 import '../widgets/app_tile.dart';
 import 'app_picker_screen.dart';
+import 'hardware_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -44,7 +46,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+      backgroundColor: isDark
+          ? const Color(0xFF0F172A)
+          : const Color(0xFFF8FAFC),
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.transparent,
@@ -66,7 +70,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-              child: const Icon(Icons.ac_unit_rounded, color: Colors.white, size: 20),
+              child: const Icon(
+                Icons.ac_unit_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
             ),
             const SizedBox(width: 12),
             Text(
@@ -107,43 +115,49 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-            const SizedBox(height: 8),
-            _ShizukuStatusCard(provider: provider),
-            const SizedBox(height: 12),
-            const _DeviceStatsCard(),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Danh sách ứng dụng',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: -0.3,
-                    ),
-                  ),
-                  if (provider.apps.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primary.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
+              const SizedBox(height: 8),
+              _ShizukuStatusCard(provider: provider),
+              const SizedBox(height: 12),
+              const _DeviceStatsCard(),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 4,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Danh sách ứng dụng',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.3,
                       ),
-                      child: Text(
-                        '${provider.apps.length} ứng dụng',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.w600,
+                    ),
+                    if (provider.apps.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${provider.apps.length} ứng dụng',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(child: _buildBody(provider)),
+              const SizedBox(height: 8),
+              Expanded(child: _buildBody(provider)),
             ],
           ),
         ),
@@ -168,7 +182,9 @@ class _HomeScreenState extends State<HomeScreen> {
           backgroundColor: Colors.transparent,
           foregroundColor: Colors.white,
           onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => AppPickerScreen(apps: provider.apps)),
+            MaterialPageRoute(
+              builder: (_) => AppPickerScreen(apps: provider.apps),
+            ),
           ),
           icon: const Icon(Icons.add_rounded),
           label: const Text(
@@ -182,9 +198,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildBody(FreezerProvider provider) {
     if (provider.isLoading && provider.apps.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(strokeWidth: 3),
-      );
+      return const Center(child: CircularProgressIndicator(strokeWidth: 3));
     }
     if (provider.apps.isEmpty) {
       final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -218,15 +232,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 provider.errorMessage ?? 'Chưa có ứng dụng nào được chọn',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
-                      height: 1.5,
-                    ),
+                  color: Theme.of(context).colorScheme.onSurface
+                      .withOpacity(0.7),
+                  height: 1.5,
+                ),
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
                 style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 onPressed: provider.loadApps,
                 icon: const Icon(Icons.refresh_rounded, size: 18),
@@ -237,27 +257,51 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     }
-    return Column(
-      children: [
-        if (provider.isLoading) const LinearProgressIndicator(minHeight: 2),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-            itemCount: provider.apps.length,
-            itemBuilder: (context, index) {
-              final app = provider.apps[index];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: AppTile(
-                  app: app,
-                  onToggle: () => provider.toggleFrozen(app),
-                  isProcessing: provider.isProcessing(app.packageName),
-                ),
-              );
-            },
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          if (provider.isLoading) const LinearProgressIndicator(minHeight: 2),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TabBar(
+              tabs: [
+                Tab(text: 'Đã cài đặt (${provider.userApps.length})'),
+                Tab(text: 'Hệ thống (${provider.systemApps.length})'),
+              ],
+            ),
           ),
-        ),
-      ],
+          Expanded(
+            child: TabBarView(
+              children: [
+                _buildAppList(provider, provider.userApps),
+                _buildAppList(provider, provider.systemApps),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAppList(FreezerProvider provider, List<AppModel> apps) {
+    if (apps.isEmpty) {
+      return const Center(child: Text('Không có ứng dụng trong nhóm này'));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+      itemCount: apps.length,
+      itemBuilder: (context, index) {
+        final app = apps[index];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: AppTile(
+            app: app,
+            onToggle: () => provider.toggleFrozen(app),
+            isProcessing: provider.isProcessing(app.packageName),
+          ),
+        );
+      },
     );
   }
 }
@@ -293,80 +337,122 @@ class _DeviceStatsCard extends StatelessWidget {
                 ),
               ],
               border: Border.all(
-                color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+                color: isDark
+                    ? Colors.white.withOpacity(0.05)
+                    : Colors.black.withOpacity(0.03),
               ),
             ),
             child: Column(
               children: [
                 Row(
                   children: [
-                Expanded(
-                  child: _MetricTile(
-                    label: 'CPU',
-                    value: '${stats.cpu.usagePercent.toStringAsFixed(1)}%',
-                    icon: Icons.memory_rounded,
-                    color: const Color(0xFF3B82F6),
-                  ),
-                ),
-                _buildDivider(isDark),
-                Expanded(
-                  child: _MetricTile(
-                    label: 'RAM',
-                    value: '${stats.ram.percent.round()}%',
-                    icon: Icons.dns_rounded,
-                    color: const Color(0xFF8B5CF6),
-                    onTap: () => _showRamBoostDialog(context, stats.ram.usedBytes),
-                  ),
-                ),
-                _buildDivider(isDark),
-                Expanded(
-                  child: _MetricTile(
-                    label: 'Pin',
-                    value: '${battery.levelPercent}%',
-                    icon: Icons.battery_charging_full_rounded,
-                    color: const Color(0xFF10B981),
-                  ),
-                ),
-                _buildDivider(isDark),
-                Expanded(
-                  child: _MetricTile(
-                    label: 'Dung lượng',
-                    value: capacity,
-                    icon: Icons.electric_bolt_rounded,
-                    color: const Color(0xFFF59E0B),
-                  ),
-                ),
+                    Expanded(
+                      child: _MetricTile(
+                        label: 'CPU',
+                        value: '${stats.cpu.usagePercent.toStringAsFixed(1)}%',
+                        icon: Icons.memory_rounded,
+                        color: const Color(0xFF3B82F6),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => HardwareDetailScreen(
+                              section: HardwareSection.cpu,
+                              provider: context.deviceStats,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _buildDivider(isDark),
+                    Expanded(
+                      child: _MetricTile(
+                        label: 'RAM',
+                        value: '${stats.ram.percent.round()}%',
+                        icon: Icons.dns_rounded,
+                        color: const Color(0xFF8B5CF6),
+                        onTap: () =>
+                            _showRamBoostDialog(context, stats.ram.usedBytes),
+                      ),
+                    ),
+                    _buildDivider(isDark),
+                    Expanded(
+                      child: _MetricTile(
+                        label: 'Pin',
+                        value: '${battery.levelPercent}%',
+                        icon: Icons.battery_charging_full_rounded,
+                        color: const Color(0xFF10B981),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => HardwareDetailScreen(
+                              section: HardwareSection.battery,
+                              provider: context.deviceStats,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _buildDivider(isDark),
+                    Expanded(
+                      child: _MetricTile(
+                        label: 'Dung lượng',
+                        value: capacity,
+                        icon: Icons.electric_bolt_rounded,
+                        color: const Color(0xFFF59E0B),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 16),
-                Divider(height: 1, color: isDark ? Colors.white12 : Colors.black12),
+                Divider(
+                  height: 1,
+                  color: isDark ? Colors.white12 : Colors.black12,
+                ),
                 const SizedBox(height: 14),
                 Row(
                   children: [
                     Expanded(
                       child: _MetricTile(
                         label: 'GPU',
-                        value: stats.gpu.currentFrequencyMhz > 0
-                            ? Formatters.frequency(stats.gpu.currentFrequencyMhz)
-                            : (stats.gpu.name.isEmpty ? 'N/A' : stats.gpu.name),
+                        value: stats.gpu.usagePercent < 0
+                            ? 'Không thể lấy'
+                            : '${stats.gpu.usagePercent.toStringAsFixed(1)}%',
                         icon: Icons.developer_board_rounded,
                         color: const Color(0xFF14B8A6),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => HardwareDetailScreen(
+                              section: HardwareSection.gpu,
+                              provider: context.deviceStats,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                     _buildDivider(isDark),
                     Expanded(
                       child: _MetricTile(
                         label: 'Nhiệt độ',
-                        value: Formatters.celsius(stats.gpu.temperatureCelsius ?? stats.cpu.temperatureCelsius),
+                        value: Formatters.celsius(
+                          stats.gpu.temperatureCelsius ??
+                              stats.cpu.temperatureCelsius,
+                        ),
                         icon: Icons.thermostat_rounded,
                         color: const Color(0xFFEF4444),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => HardwareDetailScreen(
+                              section: HardwareSection.thermal,
+                              provider: context.deviceStats,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                     _buildDivider(isDark),
                     Expanded(
                       child: _MetricTile(
                         label: 'Mạng',
-                        value: '${stats.network.downloadMbps.toStringAsFixed(1)} ↓  ${stats.network.uploadMbps.toStringAsFixed(1)} ↑ Mbps',
+                        value:
+                            '${stats.network.downloadMbps.toStringAsFixed(1)} ↓  ${stats.network.uploadMbps.toStringAsFixed(1)} ↑ Mbps',
                         icon: Icons.swap_vert_rounded,
                         color: const Color(0xFF0EA5E9),
                       ),
@@ -385,13 +471,20 @@ class _DeviceStatsCard extends StatelessWidget {
     return Container(
       height: 32,
       width: 1,
-      color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.06),
+      color: isDark
+          ? Colors.white.withOpacity(0.1)
+          : Colors.black.withOpacity(0.06),
     );
   }
 
-  Future<void> _showRamBoostDialog(BuildContext context, double usedBytes) async {
+  Future<void> _showRamBoostDialog(
+    BuildContext context,
+    double usedBytes,
+  ) async {
     final cleaner = context.cleaner;
-    final Future<void> clean = cleaner.clean(beforeUsedBytes: usedBytes).then((_) {});
+    final Future<void> clean = cleaner
+        .clean(beforeUsedBytes: usedBytes)
+        .then((_) {});
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -401,7 +494,8 @@ class _DeviceStatsCard extends StatelessWidget {
           final finished = !cleaner.isCleaning;
           if (finished) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (Navigator.of(dialogContext).canPop()) Navigator.of(dialogContext).pop();
+              if (Navigator.of(dialogContext).canPop())
+                Navigator.of(dialogContext).pop();
             });
           }
           return AlertDialog(
@@ -423,7 +517,10 @@ class _DeviceStatsCard extends StatelessWidget {
                   ),
             actions: [
               if (finished)
-                TextButton(onPressed: () => Navigator.of(dialogContext).pop(), child: const Text('Đóng')),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Đóng'),
+                ),
             ],
           );
         },
@@ -454,30 +551,31 @@ class _MetricTile extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(height: 6),
-        Text(
-          value,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 14,
-            letterSpacing: -0.2,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              letterSpacing: -0.2,
+            ),
+            maxLines: 2,
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
           ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 11,
-            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-            fontWeight: FontWeight.w500,
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              fontWeight: FontWeight.w500,
+            ),
           ),
-        ),
-      ],
+        ],
       ),
     );
   }
@@ -497,20 +595,20 @@ class _ShizukuStatusCard extends StatelessWidget {
     final Color statusColor = granted
         ? const Color(0xFF10B981)
         : denied
-            ? const Color(0xFFEF4444)
-            : const Color(0xFFF59E0B);
+        ? const Color(0xFFEF4444)
+        : const Color(0xFFF59E0B);
 
     final String title = granted
         ? 'Đã kết nối Shizuku'
         : denied
-            ? 'Cần cấp quyền Shizuku'
-            : 'Shizuku chưa hoạt động';
+        ? 'Cần cấp quyền Shizuku'
+        : 'Shizuku chưa hoạt động';
 
     final String description = granted
         ? 'Quyền kiểm soát ứng dụng đã sẵn sàng.'
         : denied
-            ? 'Vui lòng cấp quyền truy cập trong bảng thông báo Shizuku.'
-            : 'Hãy khởi chạy dịch vụ Shizuku và bấm làm mới.';
+        ? 'Vui lòng cấp quyền truy cập trong bảng thông báo Shizuku.'
+        : 'Hãy khởi chạy dịch vụ Shizuku và bấm làm mới.';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -525,10 +623,7 @@ class _ShizukuStatusCard extends StatelessWidget {
               offset: const Offset(0, 6),
             ),
           ],
-          border: Border.all(
-            color: statusColor.withOpacity(0.2),
-            width: 1.5,
-          ),
+          border: Border.all(color: statusColor.withOpacity(0.2), width: 1.5),
         ),
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -544,8 +639,8 @@ class _ShizukuStatusCard extends StatelessWidget {
                   granted
                       ? Icons.verified_user_rounded
                       : denied
-                          ? Icons.gpp_maybe_rounded
-                          : Icons.power_settings_new_rounded,
+                      ? Icons.gpp_maybe_rounded
+                      : Icons.power_settings_new_rounded,
                   color: statusColor,
                   size: 22,
                 ),
@@ -568,7 +663,8 @@ class _ShizukuStatusCard extends StatelessWidget {
                       description,
                       style: TextStyle(
                         fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                        color: Theme.of(context).colorScheme.onSurface
+                            .withOpacity(0.6),
                         height: 1.3,
                       ),
                     ),
@@ -584,14 +680,21 @@ class _ShizukuStatusCard extends StatelessWidget {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  onPressed: () => _showShizukuConnectionDialog(context, provider),
+                  onPressed: () =>
+                      _showShizukuConnectionDialog(context, provider),
                   child: Text(
                     denied ? 'Cấp quyền' : 'Kết nối',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ],
@@ -614,17 +717,21 @@ class _ShizukuStatusCard extends StatelessWidget {
         return FutureBuilder<String>(
           future: connection,
           builder: (context, snapshot) {
-            final bool finished = snapshot.connectionState == ConnectionState.done;
+            final bool finished =
+                snapshot.connectionState == ConnectionState.done;
             final bool granted = snapshot.data == 'granted';
             if (finished) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (Navigator.of(dialogContext).canPop()) Navigator.of(dialogContext).pop();
+                if (Navigator.of(dialogContext).canPop())
+                  Navigator.of(dialogContext).pop();
               });
             }
             return AlertDialog(
               icon: Icon(
                 granted ? Icons.check_circle_rounded : Icons.sync_rounded,
-                color: granted ? Colors.green : Theme.of(context).colorScheme.primary,
+                color: granted
+                    ? Colors.green
+                    : Theme.of(context).colorScheme.primary,
                 size: 34,
               ),
               title: Text(finished ? 'Đã kết nối' : 'Đang kết nối Shizuku'),

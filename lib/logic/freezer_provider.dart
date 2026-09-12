@@ -10,7 +10,7 @@ import '../data/services/shizuku_service.dart';
 /// Shizuku connection status.
 class FreezerProvider extends ChangeNotifier {
   FreezerProvider({ShizukuService? service})
-      : _service = service ?? const ShizukuService();
+    : _service = service ?? const ShizukuService();
 
   final ShizukuService _service;
 
@@ -27,6 +27,10 @@ class FreezerProvider extends ChangeNotifier {
   String _searchQuery = '';
 
   List<AppModel> get apps => List.unmodifiable(_apps);
+  List<AppModel> get userApps =>
+      _apps.where((AppModel app) => !app.isSystem).toList(growable: false);
+  List<AppModel> get systemApps =>
+      _apps.where((AppModel app) => app.isSystem).toList(growable: false);
   bool get isLoading => _isLoading;
   bool get isApplying => _isApplying;
   bool get isConnectingShizuku => _isConnectingShizuku;
@@ -35,7 +39,8 @@ class FreezerProvider extends ChangeNotifier {
   String get searchQuery => _searchQuery;
   bool get isShizukuGranted => _shizukuStatus == ShizukuService.statusGranted;
   bool get isShizukuDenied => _shizukuStatus == ShizukuService.statusDenied;
-  bool isProcessing(String packageName) => _processingPackages.contains(packageName);
+  bool isProcessing(String packageName) =>
+      _processingPackages.contains(packageName);
 
   /// Apps currently disabled for the user.
   List<AppModel> get frozenApps =>
@@ -43,8 +48,12 @@ class FreezerProvider extends ChangeNotifier {
   int get frozenCount => frozenApps.length;
 
   /// Apps that are enabled and hold a running process.
-  List<AppModel> get runningApps =>
-      _apps.where((AppModel app) => !app.isFrozen && _runningPackages.contains(app.packageName)).toList(growable: false);
+  List<AppModel> get runningApps => _apps
+      .where(
+        (AppModel app) =>
+            !app.isFrozen && _runningPackages.contains(app.packageName),
+      )
+      .toList(growable: false);
   int get runningCount => runningApps.length;
 
   /// Apps that are enabled and freezable.
@@ -53,7 +62,8 @@ class FreezerProvider extends ChangeNotifier {
 
   Set<String> get selectedPackages => Set.unmodifiable(_selectedPackages);
   int get selectedCount => _selectedPackages.length;
-  bool isSelected(String packageName) => _selectedPackages.contains(packageName);
+  bool isSelected(String packageName) =>
+      _selectedPackages.contains(packageName);
 
   /// RAM the frozen apps would have held if they were still enabled.
   double get estimatedSavedRamBytes =>
@@ -64,17 +74,20 @@ class FreezerProvider extends ChangeNotifier {
       frozenCount * AppConstants.estimatedMilliAmpPerFrozenApp;
 
   /// Percentage of the standby drain the freeze list currently offsets.
-  double get estimatedSavedPercent => (frozenCount * 5).clamp(0, 100).toDouble();
+  double get estimatedSavedPercent =>
+      (frozenCount * 5).clamp(0, 100).toDouble();
 
   List<AppModel> get visibleApps {
     final String query = _searchQuery.trim().toLowerCase();
     final List<AppModel> source = query.isEmpty
         ? _apps
         : _apps
-            .where((AppModel app) =>
-                app.name.toLowerCase().contains(query) ||
-                app.packageName.toLowerCase().contains(query))
-            .toList(growable: false);
+              .where(
+                (AppModel app) =>
+                    app.name.toLowerCase().contains(query) ||
+                    app.packageName.toLowerCase().contains(query),
+              )
+              .toList(growable: false);
     return List.unmodifiable(source);
   }
 
@@ -169,12 +182,17 @@ class FreezerProvider extends ChangeNotifier {
       _runningPackages
         ..clear()
         ..addAll(running);
-        _apps = _apps
-          .map((AppModel app) =>
-              app.copyWith(isRunning: _runningPackages.contains(app.packageName)))
+      _apps = _apps
+          .map(
+            (AppModel app) => app.copyWith(
+              isRunning: _runningPackages.contains(app.packageName),
+            ),
+          )
           .toList(growable: false);
-      _selectedPackages
-          .removeWhere((String package) => !_apps.any((AppModel app) => app.packageName == package));
+      _selectedPackages.removeWhere(
+        (String package) =>
+            !_apps.any((AppModel app) => app.packageName == package),
+      );
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -190,8 +208,11 @@ class FreezerProvider extends ChangeNotifier {
       ..clear()
       ..addAll(running);
     _apps = _apps
-        .map((AppModel app) =>
-            app.copyWith(isRunning: _runningPackages.contains(app.packageName)))
+        .map(
+          (AppModel app) => app.copyWith(
+            isRunning: _runningPackages.contains(app.packageName),
+          ),
+        )
         .toList(growable: false);
     notifyListeners();
   }
@@ -202,11 +223,15 @@ class FreezerProvider extends ChangeNotifier {
     _processingPackages.add(app.packageName);
     _applyLocalState(<String>[app.packageName], frozen: target);
     notifyListeners();
-    final bool success = await _service.setFrozen(app.packageName, frozen: target);
+    final bool success = await _service.setFrozen(
+      app.packageName,
+      frozen: target,
+    );
     _processingPackages.remove(app.packageName);
     if (!success) {
       _applyLocalState(<String>[app.packageName], frozen: !target);
-      _errorMessage = 'Không thể ${target ? 'đóng băng' : 'rã đông'} ${app.name}.';
+      _errorMessage =
+          'Không thể ${target ? 'đóng băng' : 'rã đông'} ${app.name}.';
       notifyListeners();
       return false;
     }
@@ -217,14 +242,19 @@ class FreezerProvider extends ChangeNotifier {
   /// Freezes every package in [packageNames] in one pass and force-stops them so
   /// the memory is released immediately.
   Future<int> freezePackages(List<String> packageNames) async {
-    final List<String> targets =
-        packageNames.whereType<String>().where((String name) => name.isNotEmpty).toList();
+    final List<String> targets = packageNames
+        .whereType<String>()
+        .where((String name) => name.isNotEmpty)
+        .toList();
     if (targets.isEmpty || _isApplying) return 0;
     _isApplying = true;
     _errorMessage = null;
     notifyListeners();
     try {
-      final List<String> updated = await _service.setFrozenBatch(targets, frozen: true);
+      final List<String> updated = await _service.setFrozenBatch(
+        targets,
+        frozen: true,
+      );
       if (updated.isEmpty) {
         _errorMessage = 'Không thể đóng băng ứng dụng đã chọn.';
         return 0;
@@ -241,14 +271,20 @@ class FreezerProvider extends ChangeNotifier {
 
   /// Re-enables the given packages (or every frozen app when omitted).
   Future<int> unfreezePackages([List<String>? packageNames]) async {
-    final List<String> targets = packageNames ??
-        frozenApps.map((AppModel app) => app.packageName).toList(growable: false);
+    final List<String> targets =
+        packageNames ??
+        frozenApps
+            .map((AppModel app) => app.packageName)
+            .toList(growable: false);
     if (targets.isEmpty || _isApplying) return 0;
     _isApplying = true;
     _errorMessage = null;
     notifyListeners();
     try {
-      final List<String> updated = await _service.setFrozenBatch(targets, frozen: false);
+      final List<String> updated = await _service.setFrozenBatch(
+        targets,
+        frozen: false,
+      );
       if (updated.isEmpty) {
         _errorMessage = 'Không thể rã đông ứng dụng đã chọn.';
         return 0;
@@ -264,8 +300,9 @@ class FreezerProvider extends ChangeNotifier {
   /// Force-stops the running background apps without changing freeze state.
   Future<int> killRunningBackgroundApps() async {
     if (_isApplying) return 0;
-    final List<String> targets =
-        runningApps.map((AppModel app) => app.packageName).toList(growable: false);
+    final List<String> targets = runningApps
+        .map((AppModel app) => app.packageName)
+        .toList(growable: false);
     if (targets.isEmpty) return 0;
     _isApplying = true;
     notifyListeners();
@@ -282,9 +319,14 @@ class FreezerProvider extends ChangeNotifier {
   void _applyLocalState(List<String> packages, {required bool frozen}) {
     final Set<String> targets = packages.toSet();
     _apps = _apps
-        .map((AppModel app) => targets.contains(app.packageName)
-            ? app.copyWith(isFrozen: frozen, isRunning: frozen ? false : app.isRunning)
-            : app)
+        .map(
+          (AppModel app) => targets.contains(app.packageName)
+              ? app.copyWith(
+                  isFrozen: frozen,
+                  isRunning: frozen ? false : app.isRunning,
+                )
+              : app,
+        )
         .toList(growable: false);
     if (frozen) {
       for (final String package in packages) {
