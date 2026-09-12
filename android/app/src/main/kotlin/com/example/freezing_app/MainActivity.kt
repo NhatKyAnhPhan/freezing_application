@@ -1,7 +1,13 @@
 package com.example.freezing_app
+import kotlin.collections.*
 
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.app.ActivityManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.Drawable
+import java.io.ByteArrayOutputStream
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -14,6 +20,9 @@ class MainActivity : FlutterActivity() {
 	}
 
 	private var permissionResult: MethodChannel.Result? = null
+	private lateinit var deviceStatsReader: DeviceStatsReader
+	private var installedApplicationCache: List<ApplicationInfo>? = null
+	private var disabledPackageCache: Set<String> = emptySet()
 	private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
 		if (requestCode == REQUEST_CODE) {
 			permissionResult?.success(shizukuStatus())
@@ -23,13 +32,28 @@ class MainActivity : FlutterActivity() {
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
+		deviceStatsReader = DeviceStatsReader(applicationContext)
 		Shizuku.addRequestPermissionResultListener(permissionListener)
+		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "freezing_app/device").setMethodCallHandler { call, result ->
+			when (call.method) {
+				"cleanRam" -> cleanRam(result)
+				"trimCaches" -> trimCaches(result)
+				"getDeviceStats" -> {
+					val manager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+					val processCount = manager?.runningAppProcesses?.size ?: 0
+					result.success(deviceStatsReader.read(processCount, processCount))
+				}
+				"getRunningAppCount" -> result.success(0)
+				else -> result.notImplemented()
+			}
+		}
 
 		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
 			when (call.method) {
 				"getShizukuStatus" -> result.success(shizukuStatus())
 				"requestShizukuPermission" -> requestShizukuPermission(result)
 				"getInstalledApps" -> getInstalledApps(result)
+				"getInstalledAppsPage" -> getInstalledAppsPage(call, result)
 				"setFrozen" -> {
 					val packageName = call.argument<String>("packageName")
 					val frozen = call.argument<Boolean>("frozen") ?: false
@@ -73,13 +97,15 @@ class MainActivity : FlutterActivity() {
 					.filter { it.isNotEmpty() }
 					.toSet()
 				val apps = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-					.filter { it.packageName != packageName && isUserFacingApp(it) }
+					.filter { it.packageName != packageName }
 					.sortedBy { it.loadLabel(packageManager).toString().lowercase() }
 					.map {
 						mapOf(
 							"name" to it.loadLabel(packageManager).toString(),
 							"packageName" to it.packageName,
 							"isFrozen" to disabledPackages.contains(it.packageName),
+							"isSystem" to ((it.flags and ApplicationInfo.FLAG_SYSTEM) != 0),
+							"iconBytes" to iconBytes(it.loadIcon(packageManager)),
 						)
 					}
 				runOnUiThread { result.success(apps) }
@@ -87,6 +113,87 @@ class MainActivity : FlutterActivity() {
 				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
 			}
 		}.start()
+	}
+
+	private fun getInstalledAppsPage(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
+		if (shizukuStatus() != "granted") {
+			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
+			return
+		}
+		val offset = (call.argument<Int>("offset") ?: 0).coerceAtLeast(0)
+		val limit = (call.argument<Int>("limit") ?: 24).coerceIn(1, 48)
+		val refresh = call.argument<Boolean>("refresh") ?: false
+		Thread {
+			try {
+				if (refresh || installedApplicationCache == null) {
+					disabledPackageCache = runShell("pm list packages -d")
+						.lineSequence()
+						.map { it.removePrefix("package:").trim() }
+						.filter { it.isNotEmpty() }
+						.toSet()
+					installedApplicationCache = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+						.filter { it.packageName != packageName }
+						.sortedBy { it.loadLabel(packageManager).toString().lowercase() }
+				}
+				val cached = installedApplicationCache.orEmpty()
+				val page = cached.drop(offset).take(limit).map { applicationInfo ->
+					mapOf(
+						"name" to applicationInfo.loadLabel(packageManager).toString(),
+						"packageName" to applicationInfo.packageName,
+						"isFrozen" to disabledPackageCache.contains(applicationInfo.packageName),
+						"isSystem" to ((applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0),
+						"iconBytes" to iconBytes(applicationInfo.loadIcon(packageManager)),
+					)
+				}
+				runOnUiThread { result.success(page) }
+			} catch (error: Exception) {
+				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
+			}
+		}.start()
+	}
+
+	private fun cleanRam(result: MethodChannel.Result) {
+		if (shizukuStatus() != "granted") {
+			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
+			return
+		}
+		Thread {
+			try {
+				val before = memorySnapshot()
+				runShell("am kill-all")
+				Thread.sleep(350L)
+				val after = memorySnapshot()
+				runOnUiThread { result.success(mapOf("succeeded" to true, "beforeUsedBytes" to before.first, "afterUsedBytes" to after.first, "freedBytes" to (before.first - after.first).coerceAtLeast(0.0), "killedApps" to 0, "trimmedProcesses" to 0, "durationMs" to 350, "method" to "shizuku")) }
+			} catch (error: Exception) {
+				runOnUiThread { result.success(mapOf("succeeded" to false, "beforeUsedBytes" to 0.0, "afterUsedBytes" to 0.0, "freedBytes" to 0.0, "killedApps" to 0, "trimmedProcesses" to 0, "durationMs" to 0, "method" to "none")) }
+			}
+		}.start()
+	}
+
+	private fun trimCaches(result: MethodChannel.Result) {
+		if (shizukuStatus() != "granted") {
+			result.success(false)
+			return
+		}
+		Thread { runCatching { runShell("pm trim-caches 0") }.onSuccess { runOnUiThread { result.success(true) } }.onFailure { runOnUiThread { result.success(false) } } }.start()
+	}
+
+	private fun memorySnapshot(): Pair<Double, Double> {
+		val info = ActivityManager.MemoryInfo()
+		(getSystemService(ACTIVITY_SERVICE) as? ActivityManager)?.getMemoryInfo(info)
+		return Pair((info.totalMem - info.availMem).toDouble(), info.totalMem.toDouble())
+	}
+
+	private fun iconBytes(drawable: Drawable): ByteArray {
+		val size = 48
+		val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+		val canvas = Canvas(bitmap)
+		drawable.setBounds(0, 0, size, size)
+		drawable.draw(canvas)
+		val output = ByteArrayOutputStream()
+		bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+		bitmap.recycle()
+		return output.toByteArray()
 	}
 
 	private fun setFrozen(packageName: String, frozen: Boolean, result: MethodChannel.Result) {

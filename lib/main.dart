@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'core/constants.dart';
 import 'core/themes.dart';
-import 'logic/freezer_provider.dart';
+import 'logic/app_scope.dart';
 import 'presentation/screens/home_screen.dart';
 
 void main() {
@@ -14,9 +15,10 @@ class FreezingApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Freezing App',
+      title: AppConstants.appName,
       theme: AppTheme.light,
-      home: FreezerProviderScope(child: const HomeScreen()),
+      debugShowCheckedModeBanner: false,
+      home: AppScopeRoot(child: const HomeScreen()),
     );
   }
 }

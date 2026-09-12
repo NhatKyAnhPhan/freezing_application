@@ -39,7 +39,10 @@ android {
 }
 
 dependencies {
-    implementation("com.github.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:api:13.1.0")
+    implementation("dev.rikka.shizuku:provider:13.1.0")
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.1.0"))
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.1.0")
 }
 
 kotlin {

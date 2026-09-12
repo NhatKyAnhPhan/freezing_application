@@ -6,15 +6,17 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 
+import 'package:freezing_app/core/constants.dart';
 import 'package:freezing_app/main.dart';
 
 void main() {
   testWidgets('shows the freezer home screen', (WidgetTester tester) async {
     await tester.pumpWidget(const FreezingApp());
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Freezing App'), findsOneWidget);
-    expect(find.text('Reload'), findsOneWidget);
+    expect(find.text(AppConstants.appName), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 }
