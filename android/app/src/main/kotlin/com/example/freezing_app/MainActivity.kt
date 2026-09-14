@@ -71,6 +71,16 @@ class MainActivity : FlutterActivity() {
 						setFrozen(packageName, frozen, result)
 					}
 				}
+				"setFrozenBatch" -> {
+					val packageNames = call.argument<List<String>>("packageNames") ?: emptyList()
+					val frozen = call.argument<Boolean>("frozen") ?: false
+					setFrozenBatch(packageNames, frozen, result)
+				}
+				"killBackgroundApps" -> {
+					val packageNames = call.argument<List<String>>("packageNames") ?: emptyList()
+					killBackgroundApps(packageNames, result)
+				}
+				"getRunningPackages" -> getRunningPackages(result)
 				else -> result.notImplemented()
 			}
 		}
@@ -222,6 +232,90 @@ class MainActivity : FlutterActivity() {
 				if (frozen) restrictedPackageCache.add(packageName) else restrictedPackageCache.remove(packageName)
 				disabledPackageCache = disabledPackageCache - packageName
 				runOnUiThread { result.success(true) }
+			} catch (error: Exception) {
+				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
+			}
+		}.start()
+	}
+
+	/**
+	 * Applies the same freeze state to many packages in one background thread.
+	 * Unlike [setFrozen], a single package failing does not abort the rest —
+	 * the caller (FreezerProvider) only updates local state for the packages
+	 * that come back in the result list.
+	 */
+	private fun setFrozenBatch(packageNames: List<String>, frozen: Boolean, result: MethodChannel.Result) {
+		if (shizukuStatus() != "granted") {
+			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
+			return
+		}
+		if (packageNames.isEmpty()) {
+			result.success(emptyList<String>())
+			return
+		}
+		Thread {
+			val updated = mutableListOf<String>()
+			for (targetPackage in packageNames) {
+				try {
+					val command = if (frozen) {
+						"cmd appops set $targetPackage RUN_ANY_IN_BACKGROUND ignore; cmd appops set $targetPackage RUN_IN_BACKGROUND ignore"
+					} else {
+						val restore = if (disabledPackageCache.contains(targetPackage)) "pm enable $targetPackage; " else ""
+						"${restore}cmd appops set $targetPackage RUN_ANY_IN_BACKGROUND allow; cmd appops set $targetPackage RUN_IN_BACKGROUND allow"
+					}
+					runShell(command)
+					if (frozen) restrictedPackageCache.add(targetPackage) else restrictedPackageCache.remove(targetPackage)
+					disabledPackageCache = disabledPackageCache - targetPackage
+					updated.add(targetPackage)
+				} catch (error: Exception) {
+					// Bỏ qua package lỗi (ví dụ app hệ thống không cho appops can thiệp),
+					// tiếp tục xử lý các package còn lại thay vì làm hỏng cả batch.
+				}
+			}
+			runOnUiThread { result.success(updated) }
+		}.start()
+	}
+
+	/** Force-stops every package in [packageNames]; returns how many succeeded. */
+	private fun killBackgroundApps(packageNames: List<String>, result: MethodChannel.Result) {
+		if (shizukuStatus() != "granted") {
+			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
+			return
+		}
+		if (packageNames.isEmpty()) {
+			result.success(0)
+			return
+		}
+		Thread {
+			var killed = 0
+			for (targetPackage in packageNames) {
+				try {
+					runShell("am force-stop $targetPackage")
+					killed++
+				} catch (error: Exception) {
+					// Bỏ qua package lỗi.
+				}
+			}
+			runOnUiThread { result.success(killed) }
+		}.start()
+	}
+
+	/** Package names from the process table that look like real apps, not kernel threads. */
+	private fun getRunningPackages(result: MethodChannel.Result) {
+		if (shizukuStatus() != "granted") {
+			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
+			return
+		}
+		Thread {
+			try {
+				val running = runShell("ps -A -o NAME")
+					.lineSequence()
+					.map { it.trim() }
+					.filter { it.isNotEmpty() && it.contains('.') && !it.startsWith("[") && !it.startsWith("/") && !it.startsWith("-") }
+					.map { if (it.contains(':')) it.substringBefore(':') else it }
+					.toSet()
+					.toList()
+				runOnUiThread { result.success(running) }
 			} catch (error: Exception) {
 				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
 			}

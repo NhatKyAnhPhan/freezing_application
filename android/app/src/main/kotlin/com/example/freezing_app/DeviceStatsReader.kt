@@ -85,13 +85,23 @@ class DeviceStatsReader(private val context: Context) {
 
 	/**
 	 * Aggregate utilisation derived from the delta between two `/proc/stat`
-	 * samples. The first call after start-up only primes the baseline.
+	 * samples. There is no valid delta on the very first sample after this
+	 * reader is (re)created — in that case we report 0 and wait for the next
+	 * poll (a second or two later) to produce a real reading, instead of
+	 * treating "usage since boot" or a noisy load-average guess as the value.
+	 * That previous behaviour is what caused the dashboard to flash ~100%
+	 * right after a reload or after a burst of `am force-stop` calls: a
+	 * freshly (re)created reader has no baseline, so the old code either
+	 * computed "average usage since device boot" (usually near 0, which then
+	 * triggered the load-average fallback) or read the load average during a
+	 * genuine but short-lived CPU burst — both are noisy right after a reset
+	 * and only settle down as the 1-minute load-average window decays.
 	 */
 	private fun readCpuUsage(): Double {
 		val line = firstLine("/proc/stat")
-		if (line == null || !line.startsWith("cpu ")) return loadAverageFallback()
+		if (line == null || !line.startsWith("cpu ")) return lastUsagePercent
 		val parts = line.trim().split(Regex("\\s+"))
-		if (parts.size < 6) return loadAverageFallback()
+		if (parts.size < 6) return lastUsagePercent
 
 		var total = 0L
 		var idle = 0L
@@ -101,25 +111,24 @@ class DeviceStatsReader(private val context: Context) {
 			// idle + iowait count as non-busy time.
 			if (index == 4 || index == 5) idle += value
 		}
-		if (total == 0L) return loadAverageFallback()
+		if (total == 0L) return lastUsagePercent
 
+		val isFirstSample = lastTotalTicks == 0L && lastIdleTicks == 0L
 		val deltaTotal = total - lastTotalTicks
 		val deltaIdle = idle - lastIdleTicks
 		lastTotalTicks = total
 		lastIdleTicks = idle
 
-		if (deltaTotal <= 0L || deltaIdle < 0L) return loadAverageFallback()
-		val busy = (deltaTotal - deltaIdle).toDouble() / deltaTotal.toDouble() * 100.0
-		if (busy <= 0.01) return loadAverageFallback()
-		lastUsagePercent = busy.coerceIn(0.0, 100.0)
-		return lastUsagePercent
-	}
+		// No baseline yet: don't compute "usage since boot", just prime the
+		// baseline and report 0. The next poll will have a real delta.
+		if (isFirstSample) {
+			lastUsagePercent = 0.0
+			return lastUsagePercent
+		}
+		if (deltaTotal <= 0L || deltaIdle < 0L) return lastUsagePercent
 
-	private fun loadAverageFallback(): Double {
-		val average = loadAverage()
-		val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-		val estimate = (average / cores.toDouble() * 100.0).coerceIn(0.0, 100.0)
-		if (estimate > 0.0) lastUsagePercent = estimate
+		val busy = (deltaTotal - deltaIdle).toDouble() / deltaTotal.toDouble() * 100.0
+		lastUsagePercent = busy.coerceIn(0.0, 100.0)
 		return lastUsagePercent
 	}
 

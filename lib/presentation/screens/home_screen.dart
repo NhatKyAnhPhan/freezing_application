@@ -257,30 +257,120 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     }
-    return DefaultTabController(
-      length: 2,
-      child: Column(
-        children: [
-          if (provider.isLoading) const LinearProgressIndicator(minHeight: 2),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TabBar(
-              tabs: [
-                Tab(text: 'Đã cài đặt (${provider.userApps.length})'),
-                Tab(text: 'Hệ thống (${provider.systemApps.length})'),
-              ],
-            ),
+    return _TabbedAppList(provider: provider);
+  }
+}
+
+/// Hosts the two app-list tabs, its own [TabController] (so we know which tab
+/// is active), and the "freeze all / unfreeze all" row that acts only on the
+/// apps visible in the currently selected tab.
+class _TabbedAppList extends StatefulWidget {
+  const _TabbedAppList({required this.provider});
+
+  final FreezerProvider provider;
+
+  @override
+  State<_TabbedAppList> createState() => _TabbedAppListState();
+}
+
+class _TabbedAppListState extends State<_TabbedAppList>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this)
+      ..addListener(() {
+        // Rebuild so the freeze/unfreeze row reflects the newly active tab.
+        if (!_tabController.indexIsChanging) setState(() {});
+      });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  List<AppModel> get _currentTabApps => _tabController.index == 0
+      ? widget.provider.userApps
+      : widget.provider.systemApps;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = widget.provider;
+    final currentApps = _currentTabApps;
+    final freezableInTab = currentApps
+        .where((AppModel a) => !a.isFrozen)
+        .map((AppModel a) => a.packageName)
+        .toList(growable: false);
+    final frozenInTab = currentApps
+        .where((AppModel a) => a.isFrozen)
+        .map((AppModel a) => a.packageName)
+        .toList(growable: false);
+
+    return Column(
+      children: [
+        if (provider.isLoading) const LinearProgressIndicator(minHeight: 2),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TabBar(
+            controller: _tabController,
+            tabs: [
+              Tab(text: 'Đã cài đặt (${provider.userApps.length})'),
+              Tab(text: 'Hệ thống (${provider.systemApps.length})'),
+            ],
           ),
-          Expanded(
-            child: TabBarView(
-              children: [
-                _buildAppList(provider, provider.userApps),
-                _buildAppList(provider, provider.systemApps),
-              ],
-            ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: provider.isApplying || freezableInTab.isEmpty
+                      ? null
+                      : () => _handleFreezeAll(context, freezableInTab),
+                  icon: const Icon(Icons.ac_unit_rounded, size: 18),
+                  label: const Text('Đóng băng tất cả'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: provider.isApplying || frozenInTab.isEmpty
+                      ? null
+                      : () => _handleUnfreezeAll(context, frozenInTab),
+                  icon: const Icon(Icons.wb_sunny_rounded, size: 18),
+                  label: const Text('Rã đông tất cả'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildAppList(provider, provider.userApps),
+              _buildAppList(provider, provider.systemApps),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -302,6 +392,28 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
       },
+    );
+  }
+
+  Future<void> _handleFreezeAll(
+    BuildContext context,
+    List<String> targets,
+  ) async {
+    final count = await widget.provider.freezePackages(targets);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Đã đóng băng $count ứng dụng')),
+    );
+  }
+
+  Future<void> _handleUnfreezeAll(
+    BuildContext context,
+    List<String> targets,
+  ) async {
+    final count = await widget.provider.unfreezePackages(targets);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Đã rã đông $count ứng dụng')),
     );
   }
 }
