@@ -10,4 +10,4 @@ FrostGuard is an Android app built with Kotlin and Jetpack Compose. Open the `an
 - Clean background memory and trim package caches through Shizuku.
 - Keep a rolling CPU usage history for the hardware detail screen.
 
-The Android source is in `android/app/src/main`. The existing Dart files are retained as migration reference material and are no longer part of the Android build.
+The Android source is in `android/app/src/main`. The app uses Kotlin and Jetpack Compose; Flutter is not required to build it.
