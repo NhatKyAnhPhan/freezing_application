@@ -26,15 +26,7 @@ FrostGuard là ứng dụng Android viết bằng **Kotlin** và **Jetpack Compo
 
 ## 📱 Ảnh minh họa
 
-<!-- Đặt ảnh đính kèm vào docs/screenshots/ với các tên bên dưới để hiển thị gallery. -->
-
-| Tổng quan và danh sách ứng dụng | Chi tiết CPU |
-|:--:|:--:|
-| ![Màn hình tổng quan FrostGuard](docs/screenshots/dashboard.png) | ![Màn hình chi tiết CPU](docs/screenshots/cpu-details.png) |
-
-| Danh sách ứng dụng hệ thống |
-|:--:|
-| ![Danh sách ứng dụng hệ thống](docs/screenshots/system-apps.png) |
+Ảnh chụp màn hình chưa được thêm vào repository. Khi có tệp ảnh, đặt chúng trong `docs/screenshots/` với tên `dashboard.png`, `cpu-details.png` và `system-apps.png` để hiển thị tại đây.
 
 ## 🚀 Cài đặt và chạy
 

@@ -137,7 +137,7 @@ private fun FrostGuardApp(repository: FreezerRepository, requestPermission: susp
         }
         Scaffold(containerColor = Page, snackbarHost = { SnackbarHost(snackbarHostState) }, floatingActionButton = {
             ExtendedFloatingActionButton(onClick = { picker = true }, containerColor = Blue, contentColor = Color.White,
-                icon = { Icon(Icons.Rounded.Add, null) }, text = { Text("Thêm ứng dụng", fontWeight = FontWeight.Bold) })
+                icon = { Icon(Icons.Rounded.PowerSettingsNew, null) }, text = { Text("Kill app", fontWeight = FontWeight.Bold) })
         }) { padding ->
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 96.dp)) {
                 item {
@@ -239,15 +239,32 @@ private fun FrostGuardApp(repository: FreezerRepository, requestPermission: susp
         }
 
         if (picker) {
-            AppPicker(apps, onClose = { picker = false }, onFreeze = { app ->
-                scope.launch {
-                    applying = true
-                    val success = repository.toggle(app)
-                    refreshApps()
-                    applying = false
-                    if (!success) snackbarHostState.showSnackbar("Không thể cập nhật ${app.name}")
-                }
-            })
+            KillAppPicker(
+                apps = apps,
+                applying = applying,
+                onClose = { picker = false },
+                onKill = { app ->
+                    scope.launch {
+                        applying = true
+                        val count = runCatching { repository.kill(listOf(app.packageName)) }.getOrDefault(0)
+                        refreshApps()
+                        applying = false
+                        snackbarHostState.showSnackbar(if (count > 0) "Đã kill ${app.name}" else "Không thể kill ${app.name}")
+                    }
+                },
+                onKillAll = {
+                    val targetPackages = apps.map { it.packageName }
+                    val total = targetPackages.size
+                    scope.launch {
+                        applying = true
+                        val count = runCatching { repository.kill(targetPackages) }.getOrDefault(0)
+                        refreshApps()
+                        applying = false
+                        picker = false
+                        snackbarHostState.showSnackbar("Đã kill $count/$total ứng dụng")
+                    }
+                },
+            )
         }
         if (cleaning || cleanMessage != null) AlertDialog(
             onDismissRequest = { if (!cleaning) cleanMessage = null },
@@ -325,26 +342,91 @@ private fun AppRow(app: ManagedApp, modifier: Modifier = Modifier, enabled: Bool
 }
 
 @Composable
-private fun AppPicker(apps: List<ManagedApp>, onClose: () -> Unit, onFreeze: (ManagedApp) -> Unit) {
+private fun KillAppPicker(
+    apps: List<ManagedApp>,
+    applying: Boolean,
+    onClose: () -> Unit,
+    onKill: (ManagedApp) -> Unit,
+    onKillAll: () -> Unit,
+) {
     var tab by remember { mutableIntStateOf(0) }
-    AlertDialog(onDismissRequest = onClose,
-        title = { Text("Chọn ứng dụng") },
+    var query by remember { mutableStateOf("") }
+    var confirmKillAll by remember { mutableStateOf(false) }
+    val visibleApps = apps.filter {
+        it.system == (tab == 1) &&
+            (it.name.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true))
+    }
+    AlertDialog(
+        onDismissRequest = { if (!applying) onClose() },
+        title = { Text("Kill app") },
         text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 500.dp)) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+                Text("Force-stop ứng dụng trong lần này. Ứng dụng có thể tự chạy lại theo cơ chế của Android.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(10.dp))
                 TabRow(tab) {
                     Tab(tab == 0, { tab = 0 }, text = { Text("Đã cài đặt (${apps.count { !it.system }})") })
                     Tab(tab == 1, { tab = 1 }, text = { Text("Hệ thống (${apps.count { it.system }})") })
                 }
-                LazyColumn {
-                    items(apps.filter { it.system == (tab == 1) }, key = { it.packageName }) { app ->
-                        Row(Modifier.fillMaxWidth().clickable { onFreeze(app) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) { Text(app.name, fontWeight = FontWeight.Medium); Text(app.packageName, style = MaterialTheme.typography.labelSmall, color = Muted) }
-                            Text(if (app.frozen) "Rã đông" else "Đóng băng", color = Blue, style = MaterialTheme.typography.labelMedium)
-                        }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    placeholder = { Text("Tìm ứng dụng") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                )
+                OutlinedButton(
+                    onClick = { confirmKillAll = true },
+                    enabled = !applying && apps.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) {
+                    Icon(Icons.Rounded.PowerSettingsNew, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Kill tất cả ứng dụng (${apps.size})")
+                }
+                LazyColumn(Modifier.weight(1f, fill = false).heightIn(min = 140.dp, max = 320.dp)) {
+                    items(visibleApps, key = { it.packageName }) { app ->
+                        KillAppRow(app = app, enabled = !applying, onKill = { onKill(app) })
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = onClose) { Text("Đóng") } })
+        },
+        confirmButton = { TextButton(onClick = onClose, enabled = !applying) { Text("Đóng") } },
+    )
+    if (confirmKillAll) AlertDialog(
+        onDismissRequest = { confirmKillAll = false },
+        title = { Text("Kill tất cả ứng dụng?") },
+        text = { Text("FrostGuard sẽ force-stop ${apps.size} ứng dụng đã cài, bao gồm cả ứng dụng hệ thống. Một số chức năng của máy có thể tạm thời bị ảnh hưởng.") },
+        confirmButton = {
+            TextButton(onClick = { confirmKillAll = false; onKillAll() }) { Text("Kill tất cả", color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton(onClick = { confirmKillAll = false }) { Text("Hủy") } },
+    )
+}
+
+@Composable
+private fun KillAppRow(app: ManagedApp, enabled: Boolean, onKill: () -> Unit) {
+    val context = LocalContext.current
+    val icon = remember(app.packageName) { runCatching { context.packageManager.getApplicationIcon(app.packageName) }.getOrNull() }
+    val iconBitmap = remember(app.packageName, icon) { icon?.toBitmapCompat()?.asImageBitmap() }
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (iconBitmap != null) androidx.compose.foundation.Image(iconBitmap, app.name, Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)))
+        else Icon(Icons.Rounded.Android, app.name, Modifier.size(42.dp).padding(8.dp), tint = Blue)
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(app.name, fontWeight = FontWeight.SemiBold)
+            Text(app.packageName, color = Muted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        TextButton(onClick = onKill, enabled = enabled) {
+            Icon(Icons.Rounded.PowerSettingsNew, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.error)
+            Spacer(Modifier.width(4.dp))
+            Text("Kill", color = MaterialTheme.colorScheme.error)
+        }
+    }
+    HorizontalDivider(color = Color(0xFFE9EEF5))
 }
 
 @Composable
