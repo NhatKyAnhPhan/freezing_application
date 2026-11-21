@@ -9,7 +9,7 @@ import rikka.shizuku.Shizuku
  *
  * Every call is guarded: Shizuku can disappear at any moment (permission
  * revoked, manager service killed) and we must degrade to a normal failure
- * instead of crashing the Flutter engine.
+ * instead of crashing the app.
  */
 object ShizukuShell {
 	private const val COMMAND_TIMEOUT_MS = 12000L

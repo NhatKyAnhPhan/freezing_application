@@ -1,353 +1,485 @@
 package com.example.freezing_app
-import kotlin.collections.*
 
-import android.content.pm.ApplicationInfo
+import android.os.Bundle
 import android.content.pm.PackageManager
-import android.app.ActivityManager
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.drawable.Drawable
-import java.io.ByteArrayOutputStream
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import rikka.shizuku.Shizuku
+import kotlin.coroutines.resume
 
-class MainActivity : FlutterActivity() {
-	companion object {
-		private const val CHANNEL = "freezing_app/shizuku"
-		private const val REQUEST_CODE = 1001
-	}
+private val Blue = Color(0xFF2563EB)
+private val Page = Color(0xFFF5F7FB)
+private val Ink = Color(0xFF15233B)
+private val Muted = Color(0xFF64748B)
+private val Green = Color(0xFF10B981)
+private val Violet = Color(0xFF8B5CF6)
 
-	private var permissionResult: MethodChannel.Result? = null
-	private lateinit var deviceStatsReader: DeviceStatsReader
-	private var installedApplicationCache: List<ApplicationInfo>? = null
-	private var disabledPackageCache: Set<String> = emptySet()
-	private var restrictedPackageCache: MutableSet<String> = mutableSetOf()
-	private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
-		if (requestCode == REQUEST_CODE) {
-			permissionResult?.success(shizukuStatus())
-			permissionResult = null
-		}
-	}
+class MainActivity : ComponentActivity() {
+    private lateinit var repository: FreezerRepository
+    private var permissionContinuation: ((String) -> Unit)? = null
+    private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
+        if (requestCode == REQUEST_CODE) {
+            permissionContinuation?.invoke(repository.status())
+            permissionContinuation = null
+        }
+    }
 
-	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-		super.configureFlutterEngine(flutterEngine)
-		deviceStatsReader = DeviceStatsReader(applicationContext)
-		Shizuku.addRequestPermissionResultListener(permissionListener)
-		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "freezing_app/device").setMethodCallHandler { call, result ->
-			when (call.method) {
-				"cleanRam" -> cleanRam(result)
-				"trimCaches" -> trimCaches(result)
-				"getDeviceStats" -> {
-					Thread {
-						try {
-							val manager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
-							val processCount = manager?.runningAppProcesses?.size ?: 0
-							val stats = deviceStatsReader.read(processCount, processCount)
-							runOnUiThread { result.success(stats) }
-						} catch (error: Throwable) {
-							runOnUiThread { result.error("DEVICE_STATS", error.message, null) }
-						}
-					}.start()
-				}
-				"getRunningAppCount" -> result.success(0)
-				else -> result.notImplemented()
-			}
-		}
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        repository = FreezerRepository(applicationContext)
+        Shizuku.addRequestPermissionResultListener(permissionListener)
+        setContent { FrostGuardApp(repository, ::requestShizukuPermission) }
+    }
 
-		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-			when (call.method) {
-				"getShizukuStatus" -> result.success(shizukuStatus())
-				"requestShizukuPermission" -> requestShizukuPermission(result)
-				"getInstalledApps" -> getInstalledApps(result)
-				"getInstalledAppsPage" -> getInstalledAppsPage(call, result)
-				"setFrozen" -> {
-					val packageName = call.argument<String>("packageName")
-					val frozen = call.argument<Boolean>("frozen") ?: false
-					if (packageName == null) {
-						result.error("INVALID_ARGUMENT", "packageName is required", null)
-					} else {
-						setFrozen(packageName, frozen, result)
-					}
-				}
-				"setFrozenBatch" -> {
-					val packageNames = call.argument<List<String>>("packageNames") ?: emptyList()
-					val frozen = call.argument<Boolean>("frozen") ?: false
-					setFrozenBatch(packageNames, frozen, result)
-				}
-				"killBackgroundApps" -> {
-					val packageNames = call.argument<List<String>>("packageNames") ?: emptyList()
-					killBackgroundApps(packageNames, result)
-				}
-				"getRunningPackages" -> getRunningPackages(result)
-				else -> result.notImplemented()
-			}
-		}
-	}
+    private suspend fun requestShizukuPermission(): String {
+        when (repository.status()) {
+            "granted" -> return "granted"
+            "unavailable" -> return "unavailable"
+        }
+        return suspendCancellableCoroutine { continuation ->
+            permissionContinuation = { status -> if (continuation.isActive) continuation.resume(status) }
+            continuation.invokeOnCancellation { permissionContinuation = null }
+            try { Shizuku.requestPermission(REQUEST_CODE) }
+            catch (_: Throwable) { permissionContinuation = null; continuation.resume("unavailable") }
+        }
+    }
 
-	private fun shizukuStatus(): String {
-		if (!Shizuku.pingBinder()) return "unavailable"
-		return if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) "granted" else "denied"
-	}
+    override fun onDestroy() {
+        Shizuku.removeRequestPermissionResultListener(permissionListener)
+        super.onDestroy()
+    }
 
-	private fun requestShizukuPermission(result: MethodChannel.Result) {
-		when (shizukuStatus()) {
-			"unavailable" -> result.success("unavailable")
-			"granted" -> result.success("granted")
-			else -> {
-				permissionResult = result
-				Shizuku.requestPermission(REQUEST_CODE)
-			}
-		}
-	}
+    companion object { private const val REQUEST_CODE = 1001 }
+}
 
-	private fun getInstalledApps(result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		Thread {
-			try {
-				val disabledPackages = runShell("pm list packages -d")
-					.lineSequence()
-					.map { it.removePrefix("package:").trim() }
-					.filter { it.isNotEmpty() }
-					.toSet()
-				val apps = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-					.filter { it.packageName != packageName }
-					.sortedBy { it.loadLabel(packageManager).toString().lowercase() }
-					.map {
-						mapOf(
-							"name" to it.loadLabel(packageManager).toString(),
-							"packageName" to it.packageName,
-							"isFrozen" to disabledPackages.contains(it.packageName),
-							"isSystem" to ((it.flags and ApplicationInfo.FLAG_SYSTEM) != 0),
-							"iconBytes" to iconBytes(it.loadIcon(packageManager)),
-						)
-					}
-				runOnUiThread { result.success(apps) }
-			} catch (error: Exception) {
-				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
-			}
-		}.start()
-	}
+@Composable
+private fun FrostGuardApp(repository: FreezerRepository, requestPermission: suspend () -> String) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var apps by remember { mutableStateOf<List<ManagedApp>>(emptyList()) }
+    var stats by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
+    var shizuku by remember { mutableStateOf(repository.status()) }
+    var loading by remember { mutableStateOf(false) }
+    var applying by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var tab by remember { mutableIntStateOf(0) }
+    var detail by remember { mutableStateOf<String?>(null) }
+    var picker by remember { mutableStateOf(false) }
+    var cleaning by remember { mutableStateOf(false) }
+    var cleanMessage by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var history by remember { mutableStateOf<List<Float>>(emptyList()) }
 
-	private fun getInstalledAppsPage(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		val offset = (call.argument<Int>("offset") ?: 0).coerceAtLeast(0)
-		val limit = (call.argument<Int>("limit") ?: 24).coerceIn(1, 48)
-		val refresh = call.argument<Boolean>("refresh") ?: false
-		Thread {
-			try {
-				if (refresh || installedApplicationCache == null) {
-					disabledPackageCache = runShell("pm list packages -d")
-						.lineSequence()
-						.map { it.removePrefix("package:").trim() }
-						.filter { it.isNotEmpty() }
-						.toSet()
-					restrictedPackageCache = readRestrictedPackages().toMutableSet()
-					installedApplicationCache = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-						.filter { it.packageName != packageName }
-						.sortedBy { it.loadLabel(packageManager).toString().lowercase() }
-				}
-				val cached = installedApplicationCache.orEmpty()
-				val page = cached.drop(offset).take(limit).map { applicationInfo ->
-					mapOf(
-						"name" to applicationInfo.loadLabel(packageManager).toString(),
-						"packageName" to applicationInfo.packageName,
-						"isFrozen" to (disabledPackageCache + restrictedPackageCache).contains(applicationInfo.packageName),
-						"isSystem" to ((applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0),
-						"iconBytes" to iconBytes(applicationInfo.loadIcon(packageManager)),
-					)
-				}
-				runOnUiThread { result.success(page) }
-			} catch (error: Exception) {
-				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
-			}
-		}.start()
-	}
+    suspend fun refreshApps(force: Boolean = false) {
+        if (loading) return
+        shizuku = repository.status()
+        if (shizuku != "granted") return
+        loading = true
+        error = null
+        try { apps = repository.loadApps(force) }
+        catch (e: Exception) { error = e.message ?: "Không tải được danh sách ứng dụng." }
+        finally { loading = false }
+    }
 
-	private fun cleanRam(result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		Thread {
-			try {
-				val before = memorySnapshot()
-				runShell("am kill-all")
-				Thread.sleep(350L)
-				val after = memorySnapshot()
-				runOnUiThread { result.success(mapOf("succeeded" to true, "beforeUsedBytes" to before.first, "afterUsedBytes" to after.first, "freedBytes" to (before.first - after.first).coerceAtLeast(0.0), "killedApps" to 0, "trimmedProcesses" to 0, "durationMs" to 350, "method" to "shizuku")) }
-			} catch (error: Exception) {
-				runOnUiThread { result.success(mapOf("succeeded" to false, "beforeUsedBytes" to 0.0, "afterUsedBytes" to 0.0, "freedBytes" to 0.0, "killedApps" to 0, "trimmedProcesses" to 0, "durationMs" to 0, "method" to "none")) }
-			}
-		}.start()
-	}
+    LaunchedEffect(Unit) {
+        refreshApps(true)
+        while (true) {
+            runCatching { stats = repository.stats() }
+            val cpu = stats.obj("cpu").number("usagePercent").toFloat()
+            history = (history + cpu).takeLast(30)
+            delay(2_000)
+        }
+    }
+    LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        shizuku = repository.status()
+        if (shizuku == "granted") scope.launch { refreshApps() }
+    }
 
-	private fun trimCaches(result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.success(false)
-			return
-		}
-		Thread { runCatching { runShell("pm trim-caches 0") }.onSuccess { runOnUiThread { result.success(true) } }.onFailure { runOnUiThread { result.success(false) } } }.start()
-	}
+    val frozen = apps.filter { it.frozen }
+    val running = apps.filter { !it.frozen && it.running }
+    val visible = apps.filter { (it.name.contains(query, true) || it.packageName.contains(query, true)) && (tab == 0 && !it.system || tab == 1 && it.system) }
+    val userFrozen = apps.filter { it.frozen && !it.system }
+    val systemFrozen = apps.filter { it.frozen && it.system }
 
-	private fun memorySnapshot(): Pair<Double, Double> {
-		val info = ActivityManager.MemoryInfo()
-		(getSystemService(ACTIVITY_SERVICE) as? ActivityManager)?.getMemoryInfo(info)
-		return Pair((info.totalMem - info.availMem).toDouble(), info.totalMem.toDouble())
-	}
+    MaterialTheme(colorScheme = lightColorScheme(primary = Blue, background = Page, surface = Color.White, onSurface = Ink)) {
+        if (detail != null) {
+            HardwareDetails(detail!!, stats, history) { detail = null }
+            return@MaterialTheme
+        }
+        Scaffold(containerColor = Page, snackbarHost = { SnackbarHost(snackbarHostState) }, floatingActionButton = {
+            ExtendedFloatingActionButton(onClick = { picker = true }, containerColor = Blue, contentColor = Color.White,
+                icon = { Icon(Icons.Rounded.Add, null) }, text = { Text("Thêm ứng dụng", fontWeight = FontWeight.Bold) })
+        }) { padding ->
+            LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 96.dp)) {
+                item {
+                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Blue), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.AcUnit, null, tint = Color.White) }
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text("FrostGuard", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text("SMART APP FREEZER  ·  PRO", style = MaterialTheme.typography.labelSmall, color = Muted)
+                        }
+                        IconButton(onClick = { scope.launch { refreshApps(true) } }) { Icon(Icons.Rounded.Refresh, "Làm mới", tint = Blue) }
+                    }
+                }
+                item { ShizukuCard(shizuku, onConnect = {
+                    scope.launch {
+                        shizuku = requestPermission()
+                        if (shizuku == "granted") refreshApps(true)
+                    }
+                }) }
+                item { StatsCard(stats, onDetail = { detail = it }, onClean = {
+                    scope.launch {
+                        cleaning = true
+                        cleanMessage = null
+                        val result = runCatching { repository.cleanRam(context.packageName) }
+                        cleanMessage = result.fold(
+                            { "Đã hoàn tất · giải phóng khoảng ${formatBytes(it.number("freedBytes"))}" },
+                            { it.message ?: "Không thể dọn RAM. Hãy kiểm tra quyền Shizuku." },
+                        )
+                        cleaning = false
+                        runCatching { stats = repository.stats() }
+                    }
+                }) }
+                item {
+                    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Danh sách ứng dụng", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        if (apps.isNotEmpty()) SmallPill("${apps.size} ứng dụng")
+                    }
+                }
+                if (error != null) item { Text(error!!, Modifier.padding(horizontal = 20.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
+                if (shizuku != "granted") {
+                    item { EmptyPanel(error ?: if (shizuku == "denied") "Cần cấp quyền Shizuku để điều khiển ứng dụng." else "Hãy cài đặt và khởi động Shizuku trước.", onRetry = { scope.launch { refreshApps(true) } }) }
+                } else {
+                    item {
+                        OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            placeholder = { Text("Tìm ứng dụng hoặc package") }, leadingIcon = { Icon(Icons.Rounded.Search, null) }, singleLine = true,
+                            shape = RoundedCornerShape(16.dp))
+                    }
+                    item {
+                        TabRow(tab, Modifier.padding(horizontal = 16.dp), containerColor = Color.Transparent) {
+                            Tab(tab == 0, { tab = 0 }, text = { Text("Đã cài đặt (${apps.count { !it.system }})") })
+                            Tab(tab == 1, { tab = 1 }, text = { Text("Hệ thống (${apps.count { it.system }})") })
+                        }
+                    }
+                    item {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(enabled = !applying && visible.any { !it.frozen }, modifier = Modifier.weight(1f), onClick = {
+                                scope.launch { applying = true; val result = repository.freeze(visible.filter { !it.frozen }.map { it.packageName }); repository.kill(result); refreshApps(); applying = false; snackbarHostState.showSnackbar("Đã đóng băng ${result.size} ứng dụng") }
+                            }) { Icon(Icons.Rounded.AcUnit, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Đóng băng tất cả") }
+                            OutlinedButton(enabled = !applying && visible.any { it.frozen }, modifier = Modifier.weight(1f), onClick = {
+                                scope.launch { applying = true; val result = repository.unfreeze(visible.filter { it.frozen }.map { it.packageName }); refreshApps(); applying = false; snackbarHostState.showSnackbar("Đã rã đông ${result.size} ứng dụng") }
+                            }) { Icon(Icons.Rounded.WbSunny, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Rã đông tất cả") }
+                        }
+                    }
+                    if (loading && apps.isEmpty()) item { Box(Modifier.fillMaxWidth().padding(36.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+                    else if (visible.isEmpty()) item { EmptyPanel("Không có ứng dụng trong nhóm này", onRetry = { scope.launch { refreshApps(true) } }) }
+                    else items(visible, key = { it.packageName }) { app ->
+                AppRow(app, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), enabled = !applying, onToggle = {
+                            scope.launch {
+                                applying = true
+                                val success = repository.toggle(app)
+                                refreshApps()
+                                applying = false
+                                if (!success) snackbarHostState.showSnackbar("Không thể ${if (app.frozen) "rã đông" else "đóng băng"} ${app.name}")
+                            }
+                        })
+                    }
+                    if (frozen.isNotEmpty() || running.isNotEmpty()) item {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Tổng quan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                SummaryCard("Đã đóng băng", frozen.size.toString(), Violet, Modifier.weight(1f))
+                                SummaryCard("Đang chạy", running.size.toString(), Green, Modifier.weight(1f))
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                SummaryCard("RAM ước tính tiết kiệm", formatBytes(frozen.size * 380.0 * 1024 * 1024), Blue, Modifier.weight(1f))
+                                SummaryCard("Điện chờ ước tính", "${frozen.size * 32} mA", Color(0xFFF59E0B), Modifier.weight(1f))
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(enabled = !applying && frozen.isNotEmpty(), modifier = Modifier.weight(1f), onClick = {
+                                    scope.launch { applying = true; val result = repository.unfreeze(userFrozen.map { it.packageName } + systemFrozen.map { it.packageName }); refreshApps(); applying = false; snackbarHostState.showSnackbar("Đã rã đông ${result.size} ứng dụng") }
+                                }) { Text("Rã đông tất cả") }
+                                OutlinedButton(enabled = !applying && running.isNotEmpty(), modifier = Modifier.weight(1f), onClick = {
+                                    scope.launch { applying = true; val count = repository.kill(running.map { it.packageName }); refreshApps(); applying = false; snackbarHostState.showSnackbar("Đã dừng $count ứng dụng") }
+                                }) { Text("Dừng ứng dụng chạy") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-	private fun iconBytes(drawable: Drawable): ByteArray {
-		val size = 48
-		val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-		val canvas = Canvas(bitmap)
-		drawable.setBounds(0, 0, size, size)
-		drawable.draw(canvas)
-		val output = ByteArrayOutputStream()
-		bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-		bitmap.recycle()
-		return output.toByteArray()
-	}
+        if (picker) {
+            AppPicker(apps, onClose = { picker = false }, onFreeze = { app ->
+                scope.launch {
+                    applying = true
+                    val success = repository.toggle(app)
+                    refreshApps()
+                    applying = false
+                    if (!success) snackbarHostState.showSnackbar("Không thể cập nhật ${app.name}")
+                }
+            })
+        }
+        if (cleaning || cleanMessage != null) AlertDialog(
+            onDismissRequest = { if (!cleaning) cleanMessage = null },
+            icon = { Icon(if (cleaning) Icons.Rounded.Speed else Icons.Rounded.CheckCircle, null, tint = if (cleaning) Violet else Green, modifier = Modifier.size(36.dp)) },
+            title = { Text(if (cleaning) "Đang tăng tốc RAM" else "Tăng tốc RAM") },
+            text = { if (cleaning) Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(22.dp)); Spacer(Modifier.width(14.dp)); Text("Đang giải phóng bộ nhớ nền…") } else Text(cleanMessage.orEmpty()) },
+            confirmButton = { if (!cleaning) TextButton(onClick = { cleanMessage = null }) { Text("Đóng") } },
+        )
+    }
+}
 
-	private fun setFrozen(packageName: String, frozen: Boolean, result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		Thread {
-			try {
-				val command = if (frozen) {
-					"cmd appops set $packageName RUN_ANY_IN_BACKGROUND ignore; cmd appops set $packageName RUN_IN_BACKGROUND ignore"
-				} else {
-					val restore = if (disabledPackageCache.contains(packageName)) "pm enable $packageName; " else ""
-					"${restore}cmd appops set $packageName RUN_ANY_IN_BACKGROUND allow; cmd appops set $packageName RUN_IN_BACKGROUND allow"
-				}
-				runShell(command)
-				if (frozen) restrictedPackageCache.add(packageName) else restrictedPackageCache.remove(packageName)
-				disabledPackageCache = disabledPackageCache - packageName
-				runOnUiThread { result.success(true) }
-			} catch (error: Exception) {
-				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
-			}
-		}.start()
-	}
+@Composable
+private fun ShizukuCard(status: String, onConnect: () -> Unit) {
+    val granted = status == "granted"
+    val denied = status == "denied"
+    val color = if (granted) Green else if (denied) Color(0xFFEF4444) else Color(0xFFF59E0B)
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp), shape = RoundedCornerShape(20.dp), color = Color.White, shadowElevation = 2.dp, border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = .22f))) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (granted) Icons.Rounded.VerifiedUser else Icons.Rounded.PowerSettingsNew, null, tint = color, modifier = Modifier.size(28.dp))
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(if (granted) "Đã kết nối Shizuku" else if (denied) "Cần cấp quyền Shizuku" else "Shizuku chưa hoạt động", fontWeight = FontWeight.Bold)
+                Text(if (granted) "Quyền điều khiển ứng dụng đã sẵn sàng." else if (denied) "Cấp quyền truy cập trong bảng thông báo Shizuku." else "Khởi chạy dịch vụ Shizuku rồi kết nối.", color = Muted, style = MaterialTheme.typography.bodySmall)
+            }
+            if (!granted) TextButton(onClick = onConnect) { Text(if (denied) "Cấp quyền" else "Kết nối") }
+        }
+    }
+}
 
-	/**
-	 * Applies the same freeze state to many packages in one background thread.
-	 * Unlike [setFrozen], a single package failing does not abort the rest —
-	 * the caller (FreezerProvider) only updates local state for the packages
-	 * that come back in the result list.
-	 */
-	private fun setFrozenBatch(packageNames: List<String>, frozen: Boolean, result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		if (packageNames.isEmpty()) {
-			result.success(emptyList<String>())
-			return
-		}
-		Thread {
-			val updated = mutableListOf<String>()
-			for (targetPackage in packageNames) {
-				try {
-					val command = if (frozen) {
-						"cmd appops set $targetPackage RUN_ANY_IN_BACKGROUND ignore; cmd appops set $targetPackage RUN_IN_BACKGROUND ignore"
-					} else {
-						val restore = if (disabledPackageCache.contains(targetPackage)) "pm enable $targetPackage; " else ""
-						"${restore}cmd appops set $targetPackage RUN_ANY_IN_BACKGROUND allow; cmd appops set $targetPackage RUN_IN_BACKGROUND allow"
-					}
-					runShell(command)
-					if (frozen) restrictedPackageCache.add(targetPackage) else restrictedPackageCache.remove(targetPackage)
-					disabledPackageCache = disabledPackageCache - targetPackage
-					updated.add(targetPackage)
-				} catch (error: Exception) {
-					// Bỏ qua package lỗi (ví dụ app hệ thống không cho appops can thiệp),
-					// tiếp tục xử lý các package còn lại thay vì làm hỏng cả batch.
-				}
-			}
-			runOnUiThread { result.success(updated) }
-		}.start()
-	}
+@Composable
+private fun StatsCard(stats: Map<String, Any?>, onDetail: (String) -> Unit, onClean: () -> Unit) {
+    val cpu = stats.obj("cpu"); val ram = stats.obj("ram"); val bat = stats.obj("battery"); val gpu = stats.obj("gpu"); val net = stats.obj("network")
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp), shape = RoundedCornerShape(20.dp), color = Color.White, shadowElevation = 2.dp) {
+        Column(Modifier.padding(14.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Metric("CPU", "${cpu.number("usagePercent").format1()}%", Icons.Rounded.Memory, Blue, Modifier.weight(1f)) { onDetail("CPU") }
+                Metric("RAM", "${ram.number("usedBytes").let { if (ram.number("totalBytes") > 0) (it * 100 / ram.number("totalBytes")).toInt() else 0 }}%", Icons.Rounded.Dns, Violet, Modifier.weight(1f), onClean)
+                Metric("Pin", "${bat.number("levelPercent").toInt()}%", Icons.Rounded.BatteryChargingFull, Green, Modifier.weight(1f)) { onDetail("Pin") }
+                Metric("Dung lượng", bat.number("capacityMah").let { if (it > 0) "${it.toInt()} mAh" else "N/A" }, Icons.Rounded.Bolt, Color(0xFFF59E0B), Modifier.weight(1f)) { onDetail("Pin") }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 12.dp), color = Color(0xFFE9EEF5))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Metric("GPU", if (gpu.number("usagePercent") < 0) "N/A" else "${gpu.number("usagePercent").format1()}%", Icons.Rounded.DeveloperBoard, Color(0xFF14B8A6), Modifier.weight(1f)) { onDetail("GPU") }
+                Metric("Nhiệt độ", celsius(gpu["temperatureCelsius"] ?: cpu["temperatureCelsius"]), Icons.Rounded.DeviceThermostat, Color(0xFFEF4444), Modifier.weight(1f)) { onDetail("Nhiệt độ") }
+                Metric("Mạng", "${net.number("downloadMbps").format1()} ↓  ${net.number("uploadMbps").format1()} ↑", Icons.Rounded.SwapVert, Color(0xFF0EA5E9), Modifier.weight(1f)) {}
+            }
+        }
+    }
+}
 
-	/** Force-stops every package in [packageNames]; returns how many succeeded. */
-	private fun killBackgroundApps(packageNames: List<String>, result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		if (packageNames.isEmpty()) {
-			result.success(0)
-			return
-		}
-		Thread {
-			var killed = 0
-			for (targetPackage in packageNames) {
-				try {
-					runShell("am force-stop $targetPackage")
-					killed++
-				} catch (error: Exception) {
-					// Bỏ qua package lỗi.
-				}
-			}
-			runOnUiThread { result.success(killed) }
-		}.start()
-	}
+@Composable
+private fun Metric(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(20.dp))
+        Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+        Text(label, maxLines = 1, color = Muted, style = MaterialTheme.typography.labelSmall)
+    }
+}
 
-	/** Package names from the process table that look like real apps, not kernel threads. */
-	private fun getRunningPackages(result: MethodChannel.Result) {
-		if (shizukuStatus() != "granted") {
-			result.error("SHIZUKU_PERMISSION", "Shizuku permission is required", null)
-			return
-		}
-		Thread {
-			try {
-				val running = runShell("ps -A -o NAME")
-					.lineSequence()
-					.map { it.trim() }
-					.filter { it.isNotEmpty() && it.contains('.') && !it.startsWith("[") && !it.startsWith("/") && !it.startsWith("-") }
-					.map { if (it.contains(':')) it.substringBefore(':') else it }
-					.toSet()
-					.toList()
-				runOnUiThread { result.success(running) }
-			} catch (error: Exception) {
-				runOnUiThread { result.error("SHIZUKU_COMMAND", error.message, null) }
-			}
-		}.start()
-	}
+@Composable
+private fun AppRow(app: ManagedApp, modifier: Modifier = Modifier, enabled: Boolean = true, onToggle: () -> Unit) {
+    val context = LocalContext.current
+    val icon = remember(app.packageName) { runCatching { context.packageManager.getApplicationIcon(app.packageName) }.getOrNull() }
+    val iconBitmap = remember(app.packageName, icon) { icon?.toBitmapCompat()?.asImageBitmap() }
+    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = Color.White) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (iconBitmap != null) androidx.compose.foundation.Image(iconBitmap, null, Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)))
+            else Icon(Icons.Rounded.Android, null, Modifier.size(42.dp).padding(8.dp), tint = Blue)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(app.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(app.packageName, color = Muted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Switch(checked = app.frozen, onCheckedChange = { onToggle() }, enabled = enabled)
+        }
+    }
+}
 
-	private fun readRestrictedPackages(): Set<String> {
-		return try {
-			runShell("cmd appops query-op RUN_ANY_IN_BACKGROUND ignore")
-				.lineSequence()
-				.mapNotNull { Regex("([A-Za-z0-9_]+\\.)+[A-Za-z0-9_]+").find(it)?.value }
-				.toSet()
-		} catch (error: Throwable) {
-			emptySet()
-		}
-	}
+@Composable
+private fun AppPicker(apps: List<ManagedApp>, onClose: () -> Unit, onFreeze: (ManagedApp) -> Unit) {
+    var tab by remember { mutableIntStateOf(0) }
+    AlertDialog(onDismissRequest = onClose,
+        title = { Text("Chọn ứng dụng") },
+        text = {
+            Column(Modifier.fillMaxWidth().heightIn(max = 500.dp)) {
+                TabRow(tab) {
+                    Tab(tab == 0, { tab = 0 }, text = { Text("Đã cài đặt (${apps.count { !it.system }})") })
+                    Tab(tab == 1, { tab = 1 }, text = { Text("Hệ thống (${apps.count { it.system }})") })
+                }
+                LazyColumn {
+                    items(apps.filter { it.system == (tab == 1) }, key = { it.packageName }) { app ->
+                        Row(Modifier.fillMaxWidth().clickable { onFreeze(app) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) { Text(app.name, fontWeight = FontWeight.Medium); Text(app.packageName, style = MaterialTheme.typography.labelSmall, color = Muted) }
+                            Text(if (app.frozen) "Rã đông" else "Đóng băng", color = Blue, style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = onClose) { Text("Đóng") } })
+}
 
-	private fun runShell(command: String): String {
-		val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-		val output = process.inputStream.bufferedReader().use { it.readText() }
-		val error = process.errorStream.bufferedReader().use { it.readText() }
-		val exitCode = process.waitFor()
-		if (exitCode != 0) throw IllegalStateException(error.ifBlank { output })
-		return output
-	}
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun HardwareDetails(section: String, stats: Map<String, Any?>, history: List<Float>, onBack: () -> Unit) {
+    val key = when (section) { "CPU" -> "cpu"; "GPU" -> "gpu"; "Pin" -> "battery"; "Nhiệt độ" -> "cpu"; else -> "cpu" }
+    val data = stats.obj(key)
+    val heroValue = when (section) {
+        "Pin" -> "${data.number("levelPercent").toInt()}%"
+        "Nhiệt độ" -> celsius(data["temperatureCelsius"])
+        "GPU" -> if (data.number("usagePercent") < 0) "N/A" else "${data.number("usagePercent").format1()}%"
+        else -> "${data.number("usagePercent").format1()}%"
+    }
+    Scaffold(topBar = { TopAppBar(title = { Text("Chi tiết $section") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Quay lại") } }) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().background(Page).padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                Surface(shape = RoundedCornerShape(20.dp), color = Color.White) {
+                    Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text(data.string("model").ifBlank { data.string("name").ifBlank { "${section} thiết bị" } }, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium); Text("Mức sử dụng hiện tại", color = Muted) }
+                        Text(heroValue, color = Blue, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            if (section == "CPU") item { HistoryChart(history, section) }
+            val rows = when (section) {
+                "CPU" -> {
+                    val cores = data.number("coreCount")
+                    val load = if (cores > 0) (data.number("loadAverage") / cores * 100).coerceIn(0.0, 100.0) else 0.0
+                    val temp = (data["temperatureCelsius"] as? Number)?.toDouble() ?: 0.0
+                    listOf("SoC / model" to data.string("model"), "Kiến trúc" to data.string("architecture"), "Số nhân logic" to "${cores.toInt()} nhân", "Xung hiện tại" to mhz(data.number("currentFrequencyMhz")), "Xung tối đa" to mhz(data.number("maxFrequencyMhz")), "Nhiệt độ" to celsius(data["temperatureCelsius"]), "Load average" to data.number("loadAverage").format1(), "Load theo nhân" to "${load.format1()}%", "Trạng thái nhiệt" to if (temp >= 70) "Nóng" else if (temp >= 55) "Ấm" else "Bình thường", "Tiến trình" to data.number("processCount").toInt().toString())
+                }
+                "GPU" -> listOf("GPU model" to data.string("name"), "Mức sử dụng" to if (data.number("usagePercent") < 0) "Không thể lấy trên thiết bị này" else "${data.number("usagePercent").format1()}%", "Xung hiện tại" to mhz(data.number("currentFrequencyMhz")), "Nhiệt độ" to celsius(data["temperatureCelsius"]))
+                "Pin" -> {
+                    val battery = stats.obj("battery")
+                    val reference = if (battery.number("designCapacityMah") > 0) battery.number("designCapacityMah") else battery.number("referenceCapacityMah")
+                    val actual = if (battery.number("fullChargeCapacityMah") > 0) battery.number("fullChargeCapacityMah") else battery.number("measuredCapacityMah")
+                    val health = if (reference > 0 && actual > 0) (actual / reference * 100).coerceIn(0.0, 100.0) else null
+                    val charging = battery["isCharging"] == true
+                    val plugged = battery["isPlugged"] == true
+                    listOf(
+                        "Mức pin hiện tại" to "${battery.number("levelPercent").toInt()}%",
+                        "Trạng thái" to if (charging) "Đang sạc" else if (plugged) "Đã cắm sạc" else "Đang hao",
+                        "Nguồn sạc" to battery.string("plugType"),
+                        "Sức khỏe hệ thống" to battery.string("health"),
+                        "Độ chai ước tính" to (health?.let { "${(100 - it).format1()}%" } ?: "Cần đo khi pin trên 80%"),
+                        "Sức khỏe pin ước tính" to (health?.let { "${it.format1()}%" } ?: "Cần đo khi pin trên 80%"),
+                        "Dung lượng thiết kế" to mah(battery.number("designCapacityMah")),
+                        "Dung lượng thực tế" to mah(actual),
+                        "Mốc tham chiếu" to if (battery.number("referenceCapacityMah") > 0) mah(battery.number("referenceCapacityMah")) else "Ghi nhận khi pin trên 80%",
+                        "Bộ đếm điện lượng" to mah(battery.number("chargeCounterMah")),
+                        "Điện áp" to "${battery.number("voltageMilliVolts").toInt()} mV",
+                        "Dòng điện" to "${battery.number("currentMilliAmps").toInt()} mA",
+                        "Nhiệt độ" to celsius(battery["temperatureCelsius"]),
+                        "Thời gian ước tính còn lại" to (battery["estimatedRemainingMinutes"] as? Number)?.toInt()?.let { "$it phút" }.orEmpty().ifBlank { "N/A" },
+                        "Công nghệ" to battery.string("technology"),
+                    )
+                }
+                else -> {
+                    val bat = stats.obj("battery")
+                    val cpuTemp = (stats.obj("cpu")["temperatureCelsius"] as? Number)?.toDouble() ?: 0.0
+                    val batteryTemp = bat.number("temperatureCelsius")
+                    listOf("CPU / SoC" to celsius(stats.obj("cpu")["temperatureCelsius"]), "GPU" to celsius(stats.obj("gpu")["temperatureCelsius"]), "Pin" to celsius(bat["temperatureCelsius"]), "Trạng thái CPU" to if (cpuTemp >= 70) "Nóng" else if (cpuTemp >= 55) "Ấm" else "Bình thường", "Trạng thái pin" to if (batteryTemp >= 45) "Nóng" else if (batteryTemp >= 40) "Ấm" else "Bình thường")
+                }
+            }
+            item { DetailGroup(section, rows) }
+        }
+    }
+}
 
-	private fun isUserFacingApp(applicationInfo: ApplicationInfo): Boolean {
-		return packageManager.getLaunchIntentForPackage(applicationInfo.packageName) != null
-	}
+@Composable
+private fun DetailGroup(title: String, rows: List<Pair<String, String>>) {
+    Surface(shape = RoundedCornerShape(20.dp), color = Color.White) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            rows.forEach { (label, value) ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, Modifier.weight(1f), color = Muted)
+                    Text(value.ifBlank { "N/A" }, fontWeight = FontWeight.SemiBold)
+                }
+                if (label != rows.lastOrNull()?.first) HorizontalDivider(color = Color(0xFFE9EEF5))
+            }
+        }
+    }
+}
 
-	override fun onDestroy() {
-		Shizuku.removeRequestPermissionResultListener(permissionListener)
-		super.onDestroy()
-	}
+@Composable
+private fun HistoryChart(values: List<Float>, title: String) {
+    Surface(shape = RoundedCornerShape(20.dp), color = Color.White) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("Lịch sử $title", fontWeight = FontWeight.Bold)
+            Canvas(Modifier.fillMaxWidth().height(110.dp).padding(top = 10.dp)) {
+                if (values.size > 1) {
+                    val step = size.width / (values.size - 1)
+                    val path = androidx.compose.ui.graphics.Path()
+                    values.forEachIndexed { index, value ->
+                        val y = size.height * (1f - value.coerceIn(0f, 100f) / 100f)
+                        if (index == 0) path.moveTo(0f, y) else path.lineTo(index * step, y)
+                    }
+                    drawPath(path, Blue, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(title: String, value: String, color: Color, modifier: Modifier = Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(16.dp), color = Color.White) { Column(Modifier.padding(14.dp)) { Text(value, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall); Text(title, color = Muted, style = MaterialTheme.typography.bodySmall) } }
+}
+
+@Composable
+private fun SmallPill(text: String) { Surface(shape = CircleShape, color = Blue.copy(alpha = .1f)) { Text(text, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Blue, style = MaterialTheme.typography.labelSmall) } }
+
+@Composable
+private fun EmptyPanel(message: String, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(30.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(Icons.Rounded.AcUnit, null, Modifier.size(46.dp), tint = Blue.copy(alpha = .6f))
+        Spacer(Modifier.height(12.dp)); Text(message, color = Muted); Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onRetry) { Icon(Icons.Rounded.Refresh, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Tải lại") }
+    }
+}
+
+private fun Map<String, Any?>.obj(key: String): Map<String, Any?> = (this[key] as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value } ?: emptyMap()
+private fun Map<String, Any?>.number(key: String): Double = (this[key] as? Number)?.toDouble() ?: 0.0
+private fun Map<String, Any?>.string(key: String): String = this[key]?.toString().orEmpty()
+private fun Double.format1(): String = String.format(java.util.Locale.getDefault(), "%.1f", this)
+private fun celsius(value: Any?): String = (value as? Number)?.toDouble()?.takeIf { it > 0 }?.let { "${it.format1()} °C" } ?: "Không thể lấy"
+private fun mhz(value: Double): String = if (value > 0) "${value.toInt()} MHz" else "Không thể lấy"
+private fun mah(value: Double): String = if (value > 0) "${value.toInt()} mAh" else "Không thể lấy trên thiết bị này"
+private fun formatBytes(value: Double): String = if (value >= 1024 * 1024 * 1024) "${(value / (1024 * 1024 * 1024)).format1()} GB" else "${(value / (1024 * 1024)).format1()} MB"
+
+private fun android.graphics.drawable.Drawable.toBitmapCompat(): android.graphics.Bitmap {
+    val bitmap = android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    setBounds(0, 0, canvas.width, canvas.height)
+    draw(canvas)
+    return bitmap
 }
